@@ -2,22 +2,27 @@
   "name": "x402r-arbiter-eigencloud",
   "version": "0.1.0",
   "description": "Verifiable payment dispute arbiter on EigenCloud for x402r protocol",
+  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "tsx src/index.ts",
+    "verify": "tsx src/verify-eigenai.ts"
   },
   "dependencies": {
     "@x402r/arbiter": "file:../x402r-sdk/packages/arbiter",
     "@x402r/core": "file:../x402r-sdk/packages/core",
+    "cors": "^2.8.5",
     "dotenv": "^16.6.1",
-    "openai": "^4.0.0",
+    "express": "^4.21.0",
     "viem": "^2.0.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
     "@types/node": "^20.0.0",
-    "ts-node": "^10.9.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.0.0"
   },
   "engines": {

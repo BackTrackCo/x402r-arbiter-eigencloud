@@ -1,0 +1,25 @@
+{
+  "name": "@x402r/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "x402r": "./bin/x402r.ts"
+  },
+  "scripts": {
+    "start": "tsx bin/x402r.ts",
+    "dev": "tsx bin/x402r.ts"
+  },
+  "dependencies": {
+    "@x402r/client": "file:../../x402r-sdk/packages/client",
+    "@x402r/core": "file:../../x402r-sdk/packages/core",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.0"
+  }
+}

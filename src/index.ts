@@ -51,11 +51,12 @@ const ESCROW_PERIOD_SECONDS = BigInt(
 const OPERATOR_FEE_BPS = BigInt(process.env.OPERATOR_FEE_BPS ?? "100"); // 1% default
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-// Auto-generate mnemonic in TEE if no key is provided
+// Auto-generate mnemonic if no key is provided (fallback for fresh setups)
 const generatedMnemonic =
   !MNEMONIC && !PRIVATE_KEY ? generateMnemonic(english) : undefined;
 if (generatedMnemonic) {
-  console.log("No MNEMONIC or PRIVATE_KEY provided — generated TEE wallet");
+  console.warn("No MNEMONIC or PRIVATE_KEY provided — generated ephemeral wallet");
+  console.warn("Pass PRIVATE_KEY in env for persistent identity across deployments");
 }
 
 // --- Chain config ---

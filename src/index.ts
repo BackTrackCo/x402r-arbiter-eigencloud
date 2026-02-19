@@ -49,7 +49,6 @@ const ESCROW_PERIOD_SECONDS = BigInt(
   process.env.ESCROW_PERIOD_SECONDS ?? "604800",
 ); // 7 days default
 const OPERATOR_FEE_BPS = BigInt(process.env.OPERATOR_FEE_BPS ?? "100"); // 1% default
-const DEFAULT_RECEIVER = process.env.DEFAULT_RECEIVER as Address | undefined;
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 // Auto-generate mnemonic in TEE if no key is provided
@@ -396,20 +395,54 @@ app.post("/api/evaluate", async (req, res) => {
   }
 });
 
-// --- List disputes for a receiver (newest first) ---
+// --- List disputes (across all known receivers, newest first) ---
 app.get("/api/disputes", async (req, res) => {
   try {
-    const receiver = (req.query.receiver as Address | undefined) ?? DEFAULT_RECEIVER;
-    const offset = BigInt(req.query.offset?.toString() ?? "0");
-    const count = BigInt(req.query.count?.toString() ?? "20");
+    const receiverParam = req.query.receiver as Address | undefined;
+    const offset = parseInt(req.query.offset?.toString() ?? "0", 10);
+    const count = parseInt(req.query.count?.toString() ?? "20", 10);
 
-    const result = await arbiter.getReceiverRefundRequests(offset, count, receiver, { order: "newest" });
+    // If a specific receiver is requested, query just that one
+    if (receiverParam) {
+      const result = await arbiter.getReceiverRefundRequests(
+        BigInt(offset), BigInt(count), receiverParam, { order: "newest" },
+      );
+      res.json({
+        keys: result.keys,
+        total: result.total.toString(),
+        offset: String(offset),
+        count: String(count),
+      });
+      return;
+    }
+
+    // Otherwise, aggregate disputes across all receivers from the cache
+    const receivers = new Set<Address>();
+    for (const pi of paymentInfoCache.values()) {
+      if (pi.receiver) receivers.add(pi.receiver as Address);
+    }
+
+    const allKeys: string[] = [];
+    for (const receiver of receivers) {
+      try {
+        const result = await arbiter.getReceiverRefundRequests(
+          0n, 1000n, receiver, { order: "newest" },
+        );
+        allKeys.push(...result.keys);
+      } catch {
+        // skip receivers that fail
+      }
+    }
+
+    // Paginate the aggregated results
+    const total = allKeys.length;
+    const page = allKeys.slice(offset, offset + count);
 
     res.json({
-      keys: result.keys,
-      total: result.total.toString(),
-      offset: offset.toString(),
-      count: count.toString(),
+      keys: page,
+      total: String(total),
+      offset: String(offset),
+      count: String(count),
     });
   } catch (err) {
     console.error("List disputes error:", err);

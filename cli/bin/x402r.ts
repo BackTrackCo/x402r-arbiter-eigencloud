@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 
 /**
  * x402r CLI — Agent-friendly dispute resolution tool

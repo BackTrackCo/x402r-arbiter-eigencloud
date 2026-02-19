@@ -1,12 +1,14 @@
 FROM node:22-slim
 
+RUN npm install -g pnpm@latest
+
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
 
 COPY . .
-RUN npm run build
+RUN pnpm run build
 
 EXPOSE 3000
 

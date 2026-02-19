@@ -1,7 +1,7 @@
 {
   "name": "@x402r/cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Agent-friendly CLI for x402r dispute resolution",
   "type": "module",
   "bin": {
     "x402r": "./bin/x402r.ts"
@@ -15,11 +15,25 @@
     "@x402r/core": "^0.0.2",
     "commander": "^12.1.0",
     "dotenv": "^16.4.0",
+    "tsx": "^4.7.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "tsx": "^4.7.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "SKILL.md"
+  ],
+  "keywords": [
+    "x402r",
+    "dispute",
+    "arbiter",
+    "payments",
+    "web3",
+    "openclaw"
+  ],
+  "license": "MIT"
 }

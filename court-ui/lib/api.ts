@@ -1,5 +1,7 @@
-const ARBITER_URL =
-  process.env.NEXT_PUBLIC_ARBITER_URL || "http://localhost:3000";
+const ARBITER_URL = process.env.NEXT_PUBLIC_ARBITER_URL;
+if (!ARBITER_URL) {
+  throw new Error("NEXT_PUBLIC_ARBITER_URL environment variable is required");
+}
 
 export interface HealthResponse {
   status: string;

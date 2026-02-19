@@ -10,7 +10,10 @@
     "dev": "tsx src/index.ts",
     "verify": "tsx src/verify-eigenai.ts",
     "cli": "tsx cli/bin/x402r.ts",
-    "cli:e2e": "tsx cli/e2e-test.ts"
+    "cli:e2e": "tsx cli/e2e-test.ts",
+    "seed": "tsx -r dotenv/config court-seed.ts",
+    "dashboard": "cd court-ui && npm run dev",
+    "dashboard:build": "cd court-ui && npm run build"
   },
   "dependencies": {
     "@x402r/arbiter": "file:../x402r-sdk/packages/arbiter",

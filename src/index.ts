@@ -22,6 +22,7 @@ import {
   parsePaymentInfo,
   indexPaymentInfoFromEvents,
   resolveEvidenceContent,
+  deployMarketplaceOperator,
   type PaymentInfo,
 } from "@x402r/core";
 import { createCommitment } from "./commitment.js";
@@ -35,7 +36,7 @@ const MNEMONIC = process.env.MNEMONIC;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}` | undefined;
 const RPC_URL = process.env.RPC_URL;
 const CHAIN_ID = parseInt(process.env.CHAIN_ID ?? "84532", 10);
-const OPERATOR_ADDRESS = process.env.OPERATOR_ADDRESS as Address | undefined;
+let OPERATOR_ADDRESS = process.env.OPERATOR_ADDRESS as Address | undefined;
 const EIGENAI_GRANT_SERVER =
   process.env.EIGENAI_GRANT_SERVER ??
   "https://determinal-api.eigenarcade.com";
@@ -44,13 +45,12 @@ const EIGENAI_SEED = parseInt(process.env.EIGENAI_SEED ?? "42", 10);
 const CONFIDENCE_THRESHOLD = parseFloat(
   process.env.CONFIDENCE_THRESHOLD ?? "0.7",
 );
+const ESCROW_PERIOD_SECONDS = BigInt(
+  process.env.ESCROW_PERIOD_SECONDS ?? "604800",
+); // 7 days default
+const OPERATOR_FEE_BPS = BigInt(process.env.OPERATOR_FEE_BPS ?? "100"); // 1% default
 const DEFAULT_RECEIVER = process.env.DEFAULT_RECEIVER as Address | undefined;
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
-
-if (!OPERATOR_ADDRESS) {
-  console.error("OPERATOR_ADDRESS environment variable is required");
-  process.exit(1);
-}
 
 // Auto-generate mnemonic in TEE if no key is provided
 const generatedMnemonic =
@@ -86,17 +86,46 @@ const walletClient = createWalletClient({ account, chain, transport });
 // --- Resolve addresses ---
 const addresses = resolveAddresses(networkId);
 
-// --- SDK arbiter ---
-const arbiter = new X402rArbiter({
-  publicClient: publicClient as any,
-  walletClient: walletClient as any,
-  operatorAddress: OPERATOR_ADDRESS,
-  escrowAddress: addresses.escrowAddress,
-  refundRequestAddress: addresses.refundRequestAddress,
-  arbiterRegistryAddress: addresses.arbiterRegistryAddress,
-  refundRequestEvidenceAddress: addresses.evidenceAddress,
-  chainId: CHAIN_ID,
-});
+// --- SDK arbiter (initialized after operator is resolved) ---
+let arbiter: X402rArbiter;
+
+function initArbiter(operatorAddr: Address) {
+  arbiter = new X402rArbiter({
+    publicClient: publicClient as any,
+    walletClient: walletClient as any,
+    operatorAddress: operatorAddr,
+    escrowAddress: addresses.escrowAddress,
+    refundRequestAddress: addresses.refundRequestAddress,
+    arbiterRegistryAddress: addresses.arbiterRegistryAddress,
+    refundRequestEvidenceAddress: addresses.evidenceAddress,
+    chainId: CHAIN_ID,
+  });
+}
+
+/** Deploy operator with this arbiter as the registered arbiter */
+async function autoDeployOperator(): Promise<Address> {
+  console.log("No OPERATOR_ADDRESS set — deploying operator...");
+  console.log(`  Arbiter (self): ${account.address}`);
+  console.log(`  Fee recipient: ${account.address}`);
+  console.log(`  Escrow period: ${ESCROW_PERIOD_SECONDS}s`);
+  console.log(`  Operator fee: ${OPERATOR_FEE_BPS} bps`);
+
+  const result = await deployMarketplaceOperator(
+    walletClient as any,
+    publicClient as any,
+    networkId,
+    {
+      feeRecipient: account.address,
+      arbiter: account.address,
+      escrowPeriodSeconds: ESCROW_PERIOD_SECONDS,
+      operatorFeeBps: OPERATOR_FEE_BPS,
+    },
+  );
+
+  console.log(`  Operator deployed: ${result.operatorAddress}`);
+  console.log(`  New deployments: ${result.summary.newDeployments}, existing: ${result.summary.existingContracts}`);
+  return result.operatorAddress;
+}
 
 // --- EigenAI client ---
 const eigenai = new EigenAIClient(account, EIGENAI_GRANT_SERVER, EIGENAI_MODEL);
@@ -107,6 +136,7 @@ const paymentInfoCache = new Map<string, Record<string, unknown>>();
 /** Index RefundRequested events to auto-populate paymentInfo cache */
 async function indexAndCachePaymentInfo() {
   try {
+    const prevSize = paymentInfoCache.size;
     const indexed = await indexPaymentInfoFromEvents({
       publicClient: publicClient as any,
       escrowAddress: addresses.escrowAddress as `0x${string}`,
@@ -130,9 +160,11 @@ async function indexAndCachePaymentInfo() {
       };
       paymentInfoCache.set(hash, serialized);
     }
-    console.log(
-      `Indexed ${indexed.size} paymentInfos from RefundRequested events`,
-    );
+    if (paymentInfoCache.size > prevSize) {
+      console.log(
+        `Indexed ${paymentInfoCache.size} paymentInfos (+${paymentInfoCache.size - prevSize} new)`,
+      );
+    }
   } catch (err) {
     console.warn("Failed to index RefundRequested events:", err);
   }
@@ -146,22 +178,24 @@ app.use(express.json());
 // --- Health endpoint ---
 app.get("/health", (_req, res) => {
   res.json({
-    status: "ok",
+    status: OPERATOR_ADDRESS ? "ok" : "waiting_for_operator",
     arbiterAddress: account.address,
     network: networkId,
     chainId: CHAIN_ID,
     model: EIGENAI_MODEL,
     seed: EIGENAI_SEED,
     confidenceThreshold: CONFIDENCE_THRESHOLD,
-    operatorAddress: OPERATOR_ADDRESS,
+    operatorAddress: OPERATOR_ADDRESS ?? null,
   });
 });
 
-// --- Contracts config endpoint (for dashboard) ---
+// --- Contracts config endpoint (for dashboard, clients, merchants) ---
 app.get("/api/contracts", (_req, res) => {
   res.json({
     chainId: CHAIN_ID,
     rpcUrl: RPC_URL ?? chain.rpcUrls.default.http[0],
+    operatorAddress: OPERATOR_ADDRESS ?? null,
+    arbiterAddress: account.address,
     escrowAddress: addresses.escrowAddress,
     refundRequestAddress: addresses.refundRequestAddress,
     evidenceAddress: addresses.evidenceAddress,
@@ -477,22 +511,47 @@ app.post("/api/verify", async (req, res) => {
 });
 
 // --- Start server ---
-// --- Index existing disputes, then start server ---
-const INDEX_INTERVAL_MS = 15_000; // Re-index every 15 seconds
+const INDEX_INTERVAL_MS = 15_000;
 
-indexAndCachePaymentInfo().then(() => {
+async function start() {
+  // 1. Deploy operator if not provided
+  if (!OPERATOR_ADDRESS) {
+    try {
+      OPERATOR_ADDRESS = await autoDeployOperator();
+    } catch (err) {
+      console.error("Failed to deploy operator:", err);
+      console.log("Starting server without operator — fund the arbiter wallet and restart");
+      console.log(`  Arbiter address: ${account.address}`);
+    }
+  }
+
+  // 2. Initialize arbiter SDK (if operator available)
+  if (OPERATOR_ADDRESS) {
+    initArbiter(OPERATOR_ADDRESS);
+  }
+
+  // 3. Index existing disputes
+  if (OPERATOR_ADDRESS) {
+    await indexAndCachePaymentInfo();
+  }
+
+  // 4. Start HTTP server
   app.listen(PORT, () => {
     console.log(`x402r Arbiter (EigenCloud) listening on port ${PORT}`);
     console.log(`  Arbiter address: ${account.address}`);
     console.log(`  Network: ${networkId} (${chain.name})`);
-    console.log(`  Operator: ${OPERATOR_ADDRESS}`);
+    console.log(`  Operator: ${OPERATOR_ADDRESS ?? "not deployed (needs funding)"}`);
     console.log(`  Model: ${EIGENAI_MODEL}`);
     console.log(`  Confidence threshold: ${CONFIDENCE_THRESHOLD}`);
     console.log(`  PaymentInfos cached: ${paymentInfoCache.size}`);
 
     // Poll for new on-chain disputes
-    setInterval(() => {
-      indexAndCachePaymentInfo().catch(() => {});
-    }, INDEX_INTERVAL_MS);
+    if (OPERATOR_ADDRESS) {
+      setInterval(() => {
+        indexAndCachePaymentInfo().catch(() => {});
+      }, INDEX_INTERVAL_MS);
+    }
   });
-});
+}
+
+start();

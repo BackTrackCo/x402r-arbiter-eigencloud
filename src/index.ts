@@ -14,10 +14,9 @@ import { baseSepolia, base, sepolia } from "viem/chains";
 import { X402rArbiter } from "@x402r/arbiter";
 import {
   resolveAddresses,
-  fetchFromIpfs,
   parsePaymentInfo,
-  computePaymentInfoHash,
-  RefundRequestABI,
+  indexPaymentInfoFromEvents,
+  resolveEvidenceContent,
   type PaymentInfo,
 } from "@x402r/core";
 import { createCommitment } from "./commitment.js";
@@ -97,28 +96,15 @@ const eigenai = new EigenAIClient(account, EIGENAI_GRANT_SERVER, EIGENAI_MODEL);
 const paymentInfoCache = new Map<string, Record<string, unknown>>();
 
 /** Index RefundRequested events to auto-populate paymentInfo cache */
-async function indexPaymentInfoFromEvents() {
+async function indexAndCachePaymentInfo() {
   try {
-    const currentBlock = await publicClient.getBlockNumber();
-    const fromBlock = currentBlock > 50000n ? currentBlock - 50000n : 0n;
-
-    const logs = await publicClient.getLogs({
-      address: addresses.refundRequestAddress as `0x${string}`,
-      event: {
-        type: "event" as const,
-        name: "RefundRequested",
-        inputs: RefundRequestABI.find(
-          (e) => "name" in e && e.name === "RefundRequested",
-        )!.inputs as any,
-      },
-      fromBlock,
-      toBlock: "latest",
+    const indexed = await indexPaymentInfoFromEvents({
+      publicClient: publicClient as any,
+      escrowAddress: addresses.escrowAddress as `0x${string}`,
+      chainId: CHAIN_ID,
+      refundRequestAddress: addresses.refundRequestAddress as `0x${string}`,
     });
-
-    for (const log of logs) {
-      const args = log.args as any;
-      if (!args.paymentInfo) continue;
-      const pi = args.paymentInfo;
+    for (const [hash, pi] of indexed) {
       const serialized: Record<string, unknown> = {
         operator: pi.operator,
         payer: pi.payer,
@@ -133,15 +119,10 @@ async function indexPaymentInfoFromEvents() {
         feeReceiver: pi.feeReceiver,
         salt: String(pi.salt),
       };
-      const hash = computePaymentInfoHash(
-        CHAIN_ID,
-        addresses.escrowAddress,
-        parsePaymentInfo(serialized),
-      );
       paymentInfoCache.set(hash, serialized);
     }
     console.log(
-      `Indexed ${logs.length} RefundRequested events → ${paymentInfoCache.size} paymentInfos cached`,
+      `Indexed ${indexed.size} paymentInfos from RefundRequested events`,
     );
   } catch (err) {
     console.warn("Failed to index RefundRequested events:", err);
@@ -188,11 +169,7 @@ app.post("/api/payment-info", (req, res) => {
       return;
     }
     const pi = parsePaymentInfo(raw);
-    const hash = computePaymentInfoHash(
-      CHAIN_ID,
-      addresses.escrowAddress,
-      pi,
-    );
+    const hash = arbiter.computePaymentInfoHash(pi);
     const serialized = {
       ...raw,
       maxAmount: String(raw.maxAmount ?? pi.maxAmount),
@@ -232,11 +209,7 @@ app.post("/api/evaluate", async (req, res) => {
     const nonceBI = BigInt(nonce);
 
     // Cache paymentInfo so the dashboard can look it up later
-    const piHash = computePaymentInfoHash(
-      CHAIN_ID,
-      addresses.escrowAddress,
-      paymentInfo,
-    );
+    const piHash = arbiter.computePaymentInfoHash(paymentInfo);
     if (!paymentInfoCache.has(piHash)) {
       paymentInfoCache.set(piHash, paymentInfoRaw);
     }
@@ -251,22 +224,14 @@ app.post("/api/evaluate", async (req, res) => {
     // 2. Resolve evidence content (inline JSON or IPFS fetch)
     const evidenceContent = new Map<string, string>();
     for (const entry of evidence) {
-      // If CID is valid JSON, it's inline evidence — use directly
       try {
-        JSON.parse(entry.cid);
-        evidenceContent.set(entry.cid, entry.cid);
-        continue;
-      } catch {
-        // Not JSON — try IPFS
-      }
-      try {
-        const content = await fetchFromIpfs<unknown>(entry.cid);
+        const content = await resolveEvidenceContent(entry.cid);
         evidenceContent.set(
           entry.cid,
           typeof content === "string" ? content : JSON.stringify(content),
         );
       } catch (err) {
-        console.warn(`Failed to fetch IPFS content for ${entry.cid}:`, err);
+        console.warn(`Failed to resolve evidence ${entry.cid}:`, err);
         evidenceContent.set(entry.cid, "(failed to retrieve)");
       }
     }
@@ -392,35 +357,15 @@ app.post("/api/evaluate", async (req, res) => {
 app.get("/api/disputes", async (req, res) => {
   try {
     const receiver = (req.query.receiver as Address | undefined) ?? DEFAULT_RECEIVER;
-    const dashOffset = BigInt(req.query.offset?.toString() ?? "0");
+    const offset = BigInt(req.query.offset?.toString() ?? "0");
     const count = BigInt(req.query.count?.toString() ?? "20");
 
-    // Probe for total count (count=0 returns empty keys + total)
-    const probe = await arbiter.getPendingRefundRequests(0n, 0n, receiver);
-    const total = probe.total;
-
-    if (total === 0n || dashOffset >= total) {
-      res.json({ keys: [], total: total.toString(), offset: dashOffset.toString(), count: count.toString() });
-      return;
-    }
-
-    // Fetch from end of array so newest disputes come first.
-    // Contract returns keys in insertion order [0..N-1] (oldest first).
-    // For dashboard page 1 (dashOffset=0) we want keys [N-count..N-1].
-    // For page 2 (dashOffset=count) we want keys [N-2*count..N-count-1], etc.
-    const remaining = total - dashOffset;
-    const actualCount = remaining < count ? remaining : count;
-    const contractOffset = remaining - actualCount;
-
-    const result = await arbiter.getPendingRefundRequests(contractOffset, actualCount, receiver);
-
-    // Reverse the slice so newest key is first within this page
-    const keys = [...result.keys].reverse();
+    const result = await arbiter.getReceiverRefundRequests(offset, count, receiver, { order: "newest" });
 
     res.json({
-      keys,
-      total: total.toString(),
-      offset: dashOffset.toString(),
+      keys: result.keys,
+      total: result.total.toString(),
+      offset: offset.toString(),
       count: count.toString(),
     });
   } catch (err) {
@@ -485,14 +430,7 @@ app.post("/api/verify", async (req, res) => {
     const evidenceContent = new Map<string, string>();
     for (const entry of evidence) {
       try {
-        JSON.parse(entry.cid);
-        evidenceContent.set(entry.cid, entry.cid);
-        continue;
-      } catch {
-        // Not JSON — try IPFS
-      }
-      try {
-        const content = await fetchFromIpfs<unknown>(entry.cid);
+        const content = await resolveEvidenceContent(entry.cid);
         evidenceContent.set(
           entry.cid,
           typeof content === "string" ? content : JSON.stringify(content),
@@ -531,7 +469,7 @@ app.post("/api/verify", async (req, res) => {
 
 // --- Start server ---
 // --- Index existing disputes, then start server ---
-indexPaymentInfoFromEvents().then(() => {
+indexAndCachePaymentInfo().then(() => {
   app.listen(PORT, () => {
     console.log(`x402r Arbiter (EigenCloud) listening on port ${PORT}`);
     console.log(`  Arbiter address: ${account.address}`);

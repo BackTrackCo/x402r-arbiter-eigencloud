@@ -11,8 +11,8 @@
     "dev": "tsx bin/x402r.ts"
   },
   "dependencies": {
-    "@x402r/client": "file:../../x402r-sdk/packages/client",
-    "@x402r/core": "file:../../x402r-sdk/packages/core",
+    "@x402r/client": "^0.0.2",
+    "@x402r/core": "^0.0.2",
     "commander": "^12.1.0",
     "dotenv": "^16.4.0",
     "viem": "^2.21.0"

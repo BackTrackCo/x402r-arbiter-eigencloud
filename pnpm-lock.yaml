@@ -4,19 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@x402r/core': ^0.0.1
-
 importers:
 
   .:
     dependencies:
       '@x402r/arbiter':
-        specifier: ^0.0.1
-        version: 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: ^0.0.2
+        version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       '@x402r/core':
-        specifier: ^0.0.1
-        version: 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: ^0.0.2
+        version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       commander:
         specifier: ^12.1.0
         version: 12.1.0
@@ -49,17 +46,17 @@ importers:
         specifier: ^2.3.0
         version: 2.3.1(typescript@5.9.3)
       '@x402r/client':
-        specifier: ^0.0.1
-        version: 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: ^0.0.2
+        version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       '@x402r/evm':
         specifier: ^0.0.1
         version: 0.0.1(@x402/core@2.3.1)(@x402/evm@2.3.1(typescript@5.9.3))(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       '@x402r/helpers':
-        specifier: ^0.0.1
-        version: 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: ^0.0.2
+        version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       '@x402r/merchant':
-        specifier: ^0.0.1
-        version: 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: ^0.0.2
+        version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
@@ -288,18 +285,18 @@ packages:
   '@x402/evm@2.3.1':
     resolution: {integrity: sha512-aN40OHG0HN1PhBXNFMRi5ISLHsExpF4qIvWUoVMKhFCfaXQDrqsfOKOC3PfcFtK/2Q8/SoiXNN7LsCkChL62lw==}
 
-  '@x402r/arbiter@0.0.1':
-    resolution: {integrity: sha512-N/5oZXUOIhqLoNK0Yix3GSc5uiDDuWin1joGihZbEYSPh/PyVmW8ytlIjRjUpikOmEhJmMAagrkN9S9Vm+GhIQ==}
+  '@x402r/arbiter@0.0.2':
+    resolution: {integrity: sha512-DfW+0bICKSrKjBELi8KPaZnbl+rP0kKtezam7z+dmHnVm8sFvD2C2V16MTZ+qR0q5xMIffickorr1jQt6Xa5sA==}
     peerDependencies:
       viem: ^2.0.0
 
-  '@x402r/client@0.0.1':
-    resolution: {integrity: sha512-Y5VFsCPZ63eI8Ewk0FraUTtIphwGaVRS+pykTHixlo2SzNFVaxc1Jl6Hd8+sEhS1DwgruI08Vq8d+obptyMcZQ==}
+  '@x402r/client@0.0.2':
+    resolution: {integrity: sha512-pqLQ+5cRgIX3bNh0sPzAcD7JFJBxAqL9Ru9cte79QqSjDRpLcGVRh9WNutI/9D1Cv59HNWORPvqMterAhXxIoA==}
     peerDependencies:
       viem: ^2.0.0
 
-  '@x402r/core@0.0.1':
-    resolution: {integrity: sha512-9AKt0Dvv831g8VAwi2N+66T1NxPa0I3McfqZREsxYmElRuf4PQxeXhgXnkIEHaWqQBOykltLbqJZuD/dfwNjcA==}
+  '@x402r/core@0.0.2':
+    resolution: {integrity: sha512-PVo5xhicTs6UuYgNAXvMJPvHvxevCSyqMnXiYVRGU6vaN+E9+XwQlBPCKvnvktPbuj7BtGmPnu0B9W9u1HqUCg==}
     peerDependencies:
       viem: ^2.0.0
 
@@ -310,11 +307,11 @@ packages:
       '@x402/evm': ^2.0.0
       viem: ^2.0.0
 
-  '@x402r/helpers@0.0.1':
-    resolution: {integrity: sha512-yPrRoBa6ktBJ1Qf/rFUDwRxs2DqJfsCoj5CLajT0iNUcays9kDcF5jUTPqUqXkDNRMzrnZ8y64tL9aZmnOUm4Q==}
+  '@x402r/helpers@0.0.2':
+    resolution: {integrity: sha512-BpaevUxqJuddwrYRcOSfHYnlwCzgadYKWFSEu4O7xy7QZNk+ve2JO1jK1Bx76b7dQ0Ao7w9kDjD+OAlVHK6+Xw==}
 
-  '@x402r/merchant@0.0.1':
-    resolution: {integrity: sha512-5MCfJTAlSnHF1bryVRYBz11KZkXcSuyRQk8syW1fRMhFZic7vyM/2tEg0OpI7P4IEMUTN+nqMHd+vhXWceqBHw==}
+  '@x402r/merchant@0.0.2':
+    resolution: {integrity: sha512-1SUElJABKDb4tG9PF0ma7XgjCcHIqV6SEBLrNIBCVTvRITe/wPp5XlQH1KdwyY7qf7YMpZTES+HlVRTSuIszLw==}
     peerDependencies:
       viem: ^2.0.0
 
@@ -839,17 +836,17 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402r/arbiter@0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
+  '@x402r/arbiter@0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
-      '@x402r/core': 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+      '@x402r/core': 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 
-  '@x402r/client@0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
+  '@x402r/client@0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
-      '@x402r/core': 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+      '@x402r/core': 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 
-  '@x402r/core@0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
+  '@x402r/core@0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 
@@ -859,15 +856,15 @@ snapshots:
       '@x402/evm': 2.3.1(typescript@5.9.3)
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 
-  '@x402r/helpers@0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
+  '@x402r/helpers@0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
-      '@x402r/core': 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+      '@x402r/core': 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
     transitivePeerDependencies:
       - viem
 
-  '@x402r/merchant@0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
+  '@x402r/merchant@0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
-      '@x402r/core': 0.0.1(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+      '@x402r/core': 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 
   abitype@1.2.3(typescript@5.9.3)(zod@3.25.76):

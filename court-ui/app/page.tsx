@@ -1,0 +1,158 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { DisputeCard } from "@/components/dispute-card";
+import { truncateAddress } from "@/lib/utils";
+import {
+  fetchHealth,
+  fetchDisputes,
+  fetchDispute,
+  type HealthResponse,
+  type DisputeDetail,
+} from "@/lib/api";
+
+const PAGE_SIZE = 10;
+
+interface DisputeWithKey extends DisputeDetail {
+  compositeKey: string;
+}
+
+export default function Dashboard() {
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [disputes, setDisputes] = useState<DisputeWithKey[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchHealth()
+      .then(setHealth)
+      .catch((err) => setHealthError(err.message));
+  }, []);
+
+  const loadDisputes = useCallback(async (newOffset: number) => {
+    setLoading(true);
+    try {
+      const list = await fetchDisputes(newOffset, PAGE_SIZE);
+      setTotal(Number(list.total));
+      setOffset(newOffset);
+
+      const details = await Promise.all(
+        list.keys.map(async (key) => {
+          const detail = await fetchDispute(key);
+          return { ...detail, compositeKey: key };
+        }),
+      );
+      setDisputes(details);
+    } catch {
+      // arbiter server may be offline
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDisputes(0);
+  }, [loadDisputes]);
+
+  return (
+    <div className="space-y-6">
+      {/* Arbiter Status */}
+      <section>
+        <h2 className="text-xs text-muted-foreground uppercase tracking-widest mb-3">
+          ARBITER STATUS
+        </h2>
+        {healthError ? (
+          <div className="border border-border p-3 text-xs text-muted-foreground">
+            Arbiter offline — {healthError}
+          </div>
+        ) : health ? (
+          <div className="border border-border p-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <Field label="ADDRESS" value={truncateAddress(health.arbiterAddress)} />
+            <Field label="MODEL" value={health.model} />
+            <Field label="THRESHOLD" value={String(health.confidenceThreshold)} />
+            <Field label="NETWORK" value={health.network} />
+          </div>
+        ) : (
+          <Skeleton className="h-16 w-full" />
+        )}
+      </section>
+
+      <Separator />
+
+      {/* Disputes List */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs text-muted-foreground uppercase tracking-widest">
+            DISPUTES {total > 0 && `(${total})`}
+          </h2>
+        </div>
+
+        {loading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        ) : disputes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No disputes found. The arbiter server may be offline or no disputes have been filed.
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {disputes.map((d) => (
+              <DisputeCard
+                key={d.compositeKey}
+                compositeKey={d.compositeKey}
+                paymentInfoHash={d.paymentInfoHash}
+                status={d.status}
+                amount={d.amount}
+                nonce={d.nonce}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between mt-4 text-xs">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={offset === 0}
+              onClick={() => loadDisputes(Math.max(0, offset - PAGE_SIZE))}
+              className="text-xs uppercase tracking-wider"
+            >
+              Previous
+            </Button>
+            <span className="text-muted-foreground">
+              {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={offset + PAGE_SIZE >= total}
+              onClick={() => loadDisputes(offset + PAGE_SIZE)}
+              className="text-xs uppercase tracking-wider"
+            >
+              Next
+            </Button>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-muted-foreground uppercase tracking-wider mb-0.5">{label}</p>
+      <p className="font-medium">{value}</p>
+    </div>
+  );
+}

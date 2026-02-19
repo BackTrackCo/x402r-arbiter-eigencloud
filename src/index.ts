@@ -9,13 +9,14 @@ import {
   type Hex,
   type Address,
 } from "viem";
-import { mnemonicToAccount } from "viem/accounts";
-import { baseSepolia, base } from "viem/chains";
+import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
+import { baseSepolia, base, sepolia } from "viem/chains";
 import { X402rArbiter } from "@x402r/arbiter";
 import {
   resolveAddresses,
-  fetchFromIpfs,
   parsePaymentInfo,
+  indexPaymentInfoFromEvents,
+  resolveEvidenceContent,
   type PaymentInfo,
 } from "@x402r/core";
 import { createCommitment } from "./commitment.js";
@@ -26,6 +27,7 @@ dotenv.config();
 
 // --- Environment validation ---
 const MNEMONIC = process.env.MNEMONIC;
+const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}` | undefined;
 const RPC_URL = process.env.RPC_URL;
 const CHAIN_ID = parseInt(process.env.CHAIN_ID ?? "84532", 10);
 const OPERATOR_ADDRESS = process.env.OPERATOR_ADDRESS as Address | undefined;
@@ -35,12 +37,13 @@ const EIGENAI_GRANT_SERVER =
 const EIGENAI_MODEL = process.env.EIGENAI_MODEL ?? "gpt-oss-120b-f16";
 const EIGENAI_SEED = parseInt(process.env.EIGENAI_SEED ?? "42", 10);
 const CONFIDENCE_THRESHOLD = parseFloat(
-  process.env.CONFIDENCE_THRESHOLD ?? "0.8",
+  process.env.CONFIDENCE_THRESHOLD ?? "0.7",
 );
+const DEFAULT_RECEIVER = process.env.DEFAULT_RECEIVER as Address | undefined;
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-if (!MNEMONIC) {
-  console.error("MNEMONIC environment variable is required");
+if (!MNEMONIC && !PRIVATE_KEY) {
+  console.error("MNEMONIC or PRIVATE_KEY environment variable is required");
   process.exit(1);
 }
 if (!OPERATOR_ADDRESS) {
@@ -52,6 +55,7 @@ if (!OPERATOR_ADDRESS) {
 const CHAINS: Record<number, Chain> = {
   84532: baseSepolia,
   8453: base,
+  11155111: sepolia,
 };
 const chain = CHAINS[CHAIN_ID];
 if (!chain) {
@@ -62,7 +66,9 @@ if (!chain) {
 const networkId = `eip155:${CHAIN_ID}`;
 
 // --- Wallet & clients ---
-const account = mnemonicToAccount(MNEMONIC);
+const account = PRIVATE_KEY
+  ? privateKeyToAccount(PRIVATE_KEY)
+  : mnemonicToAccount(MNEMONIC!);
 const transport = http(RPC_URL);
 
 const publicClient = createPublicClient({ chain, transport });
@@ -86,6 +92,43 @@ const arbiter = new X402rArbiter({
 // --- EigenAI client ---
 const eigenai = new EigenAIClient(account, EIGENAI_GRANT_SERVER, EIGENAI_MODEL);
 
+// --- PaymentInfo cache (hash → serialized PaymentInfo) ---
+const paymentInfoCache = new Map<string, Record<string, unknown>>();
+
+/** Index RefundRequested events to auto-populate paymentInfo cache */
+async function indexAndCachePaymentInfo() {
+  try {
+    const indexed = await indexPaymentInfoFromEvents({
+      publicClient: publicClient as any,
+      escrowAddress: addresses.escrowAddress as `0x${string}`,
+      chainId: CHAIN_ID,
+      refundRequestAddress: addresses.refundRequestAddress as `0x${string}`,
+    });
+    for (const [hash, pi] of indexed) {
+      const serialized: Record<string, unknown> = {
+        operator: pi.operator,
+        payer: pi.payer,
+        receiver: pi.receiver,
+        token: pi.token,
+        maxAmount: String(pi.maxAmount),
+        preApprovalExpiry: String(pi.preApprovalExpiry),
+        authorizationExpiry: String(pi.authorizationExpiry),
+        refundExpiry: String(pi.refundExpiry),
+        minFeeBps: Number(pi.minFeeBps),
+        maxFeeBps: Number(pi.maxFeeBps),
+        feeReceiver: pi.feeReceiver,
+        salt: String(pi.salt),
+      };
+      paymentInfoCache.set(hash, serialized);
+    }
+    console.log(
+      `Indexed ${indexed.size} paymentInfos from RefundRequested events`,
+    );
+  } catch (err) {
+    console.warn("Failed to index RefundRequested events:", err);
+  }
+}
+
 // --- Express app ---
 const app = express();
 app.use(cors());
@@ -105,6 +148,54 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// --- Contracts config endpoint (for dashboard) ---
+app.get("/api/contracts", (_req, res) => {
+  res.json({
+    chainId: CHAIN_ID,
+    rpcUrl: RPC_URL ?? chain.rpcUrls.default.http[0],
+    escrowAddress: addresses.escrowAddress,
+    refundRequestAddress: addresses.refundRequestAddress,
+    evidenceAddress: addresses.evidenceAddress,
+    usdcAddress: addresses.usdc,
+  });
+});
+
+// --- PaymentInfo cache endpoints ---
+app.post("/api/payment-info", (req, res) => {
+  try {
+    const raw = req.body;
+    if (!raw) {
+      res.status(400).json({ error: "Request body is required" });
+      return;
+    }
+    const pi = parsePaymentInfo(raw);
+    const hash = arbiter.computePaymentInfoHash(pi);
+    const serialized = {
+      ...raw,
+      maxAmount: String(raw.maxAmount ?? pi.maxAmount),
+      preApprovalExpiry: String(raw.preApprovalExpiry ?? pi.preApprovalExpiry),
+      authorizationExpiry: String(
+        raw.authorizationExpiry ?? pi.authorizationExpiry,
+      ),
+      refundExpiry: String(raw.refundExpiry ?? pi.refundExpiry),
+      salt: String(raw.salt ?? pi.salt),
+    };
+    paymentInfoCache.set(hash, serialized);
+    res.json({ hash, stored: true });
+  } catch (err) {
+    res.status(400).json({ error: String(err) });
+  }
+});
+
+app.get("/api/payment-info/:hash", (req, res) => {
+  const data = paymentInfoCache.get(req.params.hash as Hex);
+  if (!data) {
+    res.status(404).json({ error: "PaymentInfo not found for this hash" });
+    return;
+  }
+  res.json(data);
+});
+
 // --- Evaluate dispute ---
 app.post("/api/evaluate", async (req, res) => {
   try {
@@ -117,6 +208,12 @@ app.post("/api/evaluate", async (req, res) => {
     const paymentInfo: PaymentInfo = parsePaymentInfo(paymentInfoRaw);
     const nonceBI = BigInt(nonce);
 
+    // Cache paymentInfo so the dashboard can look it up later
+    const piHash = arbiter.computePaymentInfoHash(paymentInfo);
+    if (!paymentInfoCache.has(piHash)) {
+      paymentInfoCache.set(piHash, paymentInfoRaw);
+    }
+
     // 1. Get all evidence
     const evidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
     if (evidence.length === 0) {
@@ -124,43 +221,81 @@ app.post("/api/evaluate", async (req, res) => {
       return;
     }
 
-    // 2. Fetch IPFS content for each evidence entry
+    // 2. Resolve evidence content (inline JSON or IPFS fetch)
     const evidenceContent = new Map<string, string>();
     for (const entry of evidence) {
       try {
-        const content = await fetchFromIpfs<unknown>(entry.cid);
+        const content = await resolveEvidenceContent(entry.cid);
         evidenceContent.set(
           entry.cid,
           typeof content === "string" ? content : JSON.stringify(content),
         );
       } catch (err) {
-        console.warn(`Failed to fetch IPFS content for ${entry.cid}:`, err);
+        console.warn(`Failed to resolve evidence ${entry.cid}:`, err);
         evidenceContent.set(entry.cid, "(failed to retrieve)");
       }
     }
 
-    // 3. Build prompt & evaluate via EigenAI
+    // 3. Build prompt & evaluate via EigenAI (random seed per dispute)
+    const seed = Math.floor(Math.random() * 10000);
     const userPrompt = buildPrompt(evidence, evidenceContent);
     const aiResult = await eigenai.evaluate(
       SYSTEM_PROMPT,
       userPrompt,
-      EIGENAI_SEED,
+      seed,
     );
 
     // 4. Create commitment hash
     const commitment = createCommitment(
       userPrompt,
-      EIGENAI_SEED,
+      seed,
       aiResult.rawResponse,
     );
 
-    // 5. Submit commitment as arbiter evidence
+    // 5. Parse AI decision (model may include reasoning text before the JSON)
+    let decision: { decision: string; reasoning: string; confidence: number };
+    try {
+      decision = JSON.parse(aiResult.displayContent);
+    } catch {
+      // Try to extract JSON object from the response (model often prepends reasoning)
+      const jsonMatch = aiResult.displayContent.match(/\{[\s\S]*"decision"[\s\S]*"reasoning"[\s\S]*"confidence"[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          decision = JSON.parse(jsonMatch[0]);
+        } catch {
+          res.status(500).json({
+            error: "Failed to parse AI response",
+            rawResponse: aiResult.displayContent,
+          });
+          return;
+        }
+      } else {
+        res.status(500).json({
+          error: "Failed to parse AI response",
+          rawResponse: aiResult.displayContent,
+        });
+        return;
+      }
+    }
+
+    // 6. Apply confidence threshold to determine on-chain outcome
+    const meetsThreshold =
+      decision.decision === "approve" &&
+      decision.confidence >= CONFIDENCE_THRESHOLD;
+    const outcome = meetsThreshold ? "approve" : "deny";
+
+    // 7. Submit arbiter evidence (commitment + decision)
     const evidenceCid = JSON.stringify({
-      type: "arbiter-commitment",
-      commitmentHash: commitment.commitmentHash,
-      promptHash: commitment.promptHash,
-      responseHash: commitment.responseHash,
-      seed: commitment.seed,
+      type: "arbiter-ruling",
+      decision: outcome,
+      reasoning: decision.reasoning,
+      confidence: decision.confidence,
+      commitment: {
+        commitmentHash: commitment.commitmentHash,
+        promptHash: commitment.promptHash,
+        responseHash: commitment.responseHash,
+        seed: commitment.seed,
+      },
       model: EIGENAI_MODEL,
     });
     const submitTx = await arbiter.submitEvidence(
@@ -169,24 +304,9 @@ app.post("/api/evaluate", async (req, res) => {
       evidenceCid,
     );
 
-    // 6. Parse AI decision
-    let decision: { decision: string; reasoning: string; confidence: number };
-    try {
-      decision = JSON.parse(aiResult.displayContent);
-    } catch {
-      res.status(500).json({
-        error: "Failed to parse AI response",
-        rawResponse: aiResult.displayContent,
-      });
-      return;
-    }
-
-    // 7. Submit on-chain decision
+    // 8. Submit on-chain decision
     let decisionTx: { txHash: Hex };
-    if (
-      decision.decision === "approve" &&
-      decision.confidence >= CONFIDENCE_THRESHOLD
-    ) {
+    if (meetsThreshold) {
       decisionTx = await arbiter.approveRefundRequest(paymentInfo, nonceBI);
 
       // 8. Execute refund in escrow if approved
@@ -233,21 +353,17 @@ app.post("/api/evaluate", async (req, res) => {
   }
 });
 
-// --- List disputes for a receiver ---
+// --- List disputes for a receiver (newest first) ---
 app.get("/api/disputes", async (req, res) => {
   try {
-    const receiver = req.query.receiver as Address | undefined;
+    const receiver = (req.query.receiver as Address | undefined) ?? DEFAULT_RECEIVER;
     const offset = BigInt(req.query.offset?.toString() ?? "0");
     const count = BigInt(req.query.count?.toString() ?? "20");
 
-    const result = await arbiter.getPendingRefundRequests(
-      offset,
-      count,
-      receiver,
-    );
+    const result = await arbiter.getReceiverRefundRequests(offset, count, receiver, { order: "newest" });
 
     res.json({
-      keys: result.keys.map((k) => k),
+      keys: result.keys,
       total: result.total.toString(),
       offset: offset.toString(),
       count: count.toString(),
@@ -288,12 +404,33 @@ app.post("/api/verify", async (req, res) => {
     const paymentInfo: PaymentInfo = parsePaymentInfo(paymentInfoRaw);
     const nonceBI = BigInt(nonce);
 
-    // Fetch evidence and rebuild prompt
-    const evidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
+    // Separate arbiter evidence (to extract seed) from party evidence (for prompt)
+    const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
+    const arbiterEvidence = allEvidence.filter((e) => e.role === 2);
+    const evidence = allEvidence.filter((e) => e.role !== 2);
+
+    // Extract seed from the arbiter's on-chain evidence
+    let seed = EIGENAI_SEED; // fallback to global default
+    for (const entry of arbiterEvidence) {
+      try {
+        const parsed = JSON.parse(entry.cid);
+        if (parsed.commitment?.seed !== undefined) {
+          seed = parsed.commitment.seed;
+          break;
+        }
+        if (parsed.seed !== undefined) {
+          seed = parsed.seed;
+          break;
+        }
+      } catch {
+        // Not JSON — skip
+      }
+    }
+
     const evidenceContent = new Map<string, string>();
     for (const entry of evidence) {
       try {
-        const content = await fetchFromIpfs<unknown>(entry.cid);
+        const content = await resolveEvidenceContent(entry.cid);
         evidenceContent.set(
           entry.cid,
           typeof content === "string" ? content : JSON.stringify(content),
@@ -305,17 +442,17 @@ app.post("/api/verify", async (req, res) => {
 
     const userPrompt = buildPrompt(evidence, evidenceContent);
 
-    // Replay EigenAI evaluation with same seed
+    // Replay EigenAI evaluation with the same seed from the original ruling
     const aiResult = await eigenai.evaluate(
       SYSTEM_PROMPT,
       userPrompt,
-      EIGENAI_SEED,
+      seed,
     );
 
     // Recompute commitment
     const replayCommitment = createCommitment(
       userPrompt,
-      EIGENAI_SEED,
+      seed,
       aiResult.rawResponse,
     );
 
@@ -331,10 +468,15 @@ app.post("/api/verify", async (req, res) => {
 });
 
 // --- Start server ---
-app.listen(PORT, () => {
-  console.log(`x402r Arbiter (EigenCloud) listening on port ${PORT}`);
-  console.log(`  Arbiter address: ${account.address}`);
-  console.log(`  Network: ${networkId} (${chain.name})`);
-  console.log(`  Operator: ${OPERATOR_ADDRESS}`);
-  console.log(`  Model: ${EIGENAI_MODEL} (seed=${EIGENAI_SEED})`);
+// --- Index existing disputes, then start server ---
+indexAndCachePaymentInfo().then(() => {
+  app.listen(PORT, () => {
+    console.log(`x402r Arbiter (EigenCloud) listening on port ${PORT}`);
+    console.log(`  Arbiter address: ${account.address}`);
+    console.log(`  Network: ${networkId} (${chain.name})`);
+    console.log(`  Operator: ${OPERATOR_ADDRESS}`);
+    console.log(`  Model: ${EIGENAI_MODEL}`);
+    console.log(`  Confidence threshold: ${CONFIDENCE_THRESHOLD}`);
+    console.log(`  PaymentInfos cached: ${paymentInfoCache.size}`);
+  });
 });

@@ -16,9 +16,8 @@
     "dashboard:build": "cd court-ui && npm run build"
   },
   "dependencies": {
-    "@x402r/arbiter": "file:../x402r-sdk/packages/arbiter",
-    "@x402r/client": "file:../x402r-sdk/packages/client",
-    "@x402r/core": "file:../x402r-sdk/packages/core",
+    "@x402r/arbiter": "^0.0.1",
+    "@x402r/core": "^0.0.1",
     "commander": "^12.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
@@ -31,14 +30,20 @@
     "@types/node": "^20.0.0",
     "@x402/core": "^2.3.0",
     "@x402/evm": "^2.3.0",
-    "@x402r/evm": "file:../x402r-scheme/packages/evm",
-    "@x402r/helpers": "file:../x402r-sdk/packages/helpers",
-    "@x402r/merchant": "file:../x402r-sdk/packages/merchant",
+    "@x402r/client": "^0.0.1",
+    "@x402r/evm": "^0.0.1",
+    "@x402r/helpers": "^0.0.1",
+    "@x402r/merchant": "^0.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@x402r/core": "^0.0.1"
+    }
   },
   "license": "MIT",
   "keywords": [

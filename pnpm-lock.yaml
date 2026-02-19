@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@x402/core@2.3.1':
+    hash: 38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2
+    path: patches/@x402__core@2.3.1.patch
+
 importers:
 
   .:
@@ -41,7 +46,7 @@ importers:
         version: 20.19.33
       '@x402/core':
         specifier: ^2.3.0
-        version: 2.3.1
+        version: 2.3.1(patch_hash=38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2)
       '@x402/evm':
         specifier: ^2.3.0
         version: 2.3.1(typescript@5.9.3)
@@ -49,8 +54,8 @@ importers:
         specifier: ^0.0.2
         version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       '@x402r/evm':
-        specifier: ^0.0.1
-        version: 0.0.1(@x402/core@2.3.1)(@x402/evm@2.3.1(typescript@5.9.3))(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: file:../x402r-scheme/packages/evm
+        version: file:../x402r-scheme/packages/evm(@x402/core@2.3.1(patch_hash=38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2))(@x402/evm@2.3.1(typescript@5.9.3))(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
       '@x402r/helpers':
         specifier: ^0.0.2
         version: 0.0.2(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))
@@ -300,8 +305,8 @@ packages:
     peerDependencies:
       viem: ^2.0.0
 
-  '@x402r/evm@0.0.1':
-    resolution: {integrity: sha512-+ufwzjLN7Ijzpn0x0h13ji/rHgU0mW08k0DCqk6XiZsfji2bGECTxu5EoM/A+7IP8OkDROFeHh44iZTguOO5vQ==}
+  '@x402r/evm@file:../x402r-scheme/packages/evm':
+    resolution: {directory: ../x402r-scheme/packages/evm, type: directory}
     peerDependencies:
       '@x402/core': ^2.0.0
       '@x402/evm': ^2.0.0
@@ -822,13 +827,13 @@ snapshots:
       '@types/http-errors': 2.0.5
       '@types/node': 20.19.33
 
-  '@x402/core@2.3.1':
+  '@x402/core@2.3.1(patch_hash=38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2)':
     dependencies:
       zod: 3.25.76
 
   '@x402/evm@2.3.1(typescript@5.9.3)':
     dependencies:
-      '@x402/core': 2.3.1
+      '@x402/core': 2.3.1(patch_hash=38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2)
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:
@@ -850,9 +855,9 @@ snapshots:
     dependencies:
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 
-  '@x402r/evm@0.0.1(@x402/core@2.3.1)(@x402/evm@2.3.1(typescript@5.9.3))(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
+  '@x402r/evm@file:../x402r-scheme/packages/evm(@x402/core@2.3.1(patch_hash=38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2))(@x402/evm@2.3.1(typescript@5.9.3))(viem@2.46.2(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
-      '@x402/core': 2.3.1
+      '@x402/core': 2.3.1(patch_hash=38f29270e49b2f3e4e2b9732df0a6da9060296d67764ce3c6eaee437e2143ca2)
       '@x402/evm': 2.3.1(typescript@5.9.3)
       viem: 2.46.2(typescript@5.9.3)(zod@3.25.76)
 

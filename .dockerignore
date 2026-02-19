@@ -1,9 +1,19 @@
 node_modules
-npm-debug.log
 dist
 .git
 .gitignore
-README.md
 .env
+.env.*
+.env.example
+README.md
+
+# Seed script + dashboard (not part of arbiter server)
+court-seed.ts
+court-ui/
+cli/
+patches/
+
+# Dev/test artifacts
+npm-debug.log
 coverage
 .nyc_output

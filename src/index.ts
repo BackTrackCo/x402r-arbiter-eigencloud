@@ -9,7 +9,12 @@ import {
   type Hex,
   type Address,
 } from "viem";
-import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
+import {
+  mnemonicToAccount,
+  privateKeyToAccount,
+  generateMnemonic,
+} from "viem/accounts";
+import { english } from "viem/accounts";
 import { baseSepolia, base, sepolia } from "viem/chains";
 import { X402rArbiter } from "@x402r/arbiter";
 import {
@@ -42,13 +47,16 @@ const CONFIDENCE_THRESHOLD = parseFloat(
 const DEFAULT_RECEIVER = process.env.DEFAULT_RECEIVER as Address | undefined;
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-if (!MNEMONIC && !PRIVATE_KEY) {
-  console.error("MNEMONIC or PRIVATE_KEY environment variable is required");
-  process.exit(1);
-}
 if (!OPERATOR_ADDRESS) {
   console.error("OPERATOR_ADDRESS environment variable is required");
   process.exit(1);
+}
+
+// Auto-generate mnemonic in TEE if no key is provided
+const generatedMnemonic =
+  !MNEMONIC && !PRIVATE_KEY ? generateMnemonic(english) : undefined;
+if (generatedMnemonic) {
+  console.log("No MNEMONIC or PRIVATE_KEY provided — generated TEE wallet");
 }
 
 // --- Chain config ---
@@ -66,9 +74,10 @@ if (!chain) {
 const networkId = `eip155:${CHAIN_ID}`;
 
 // --- Wallet & clients ---
+const effectiveMnemonic = MNEMONIC ?? generatedMnemonic;
 const account = PRIVATE_KEY
   ? privateKeyToAccount(PRIVATE_KEY)
-  : mnemonicToAccount(MNEMONIC!);
+  : mnemonicToAccount(effectiveMnemonic!);
 const transport = http(RPC_URL);
 
 const publicClient = createPublicClient({ chain, transport });
@@ -469,6 +478,8 @@ app.post("/api/verify", async (req, res) => {
 
 // --- Start server ---
 // --- Index existing disputes, then start server ---
+const INDEX_INTERVAL_MS = 15_000; // Re-index every 15 seconds
+
 indexAndCachePaymentInfo().then(() => {
   app.listen(PORT, () => {
     console.log(`x402r Arbiter (EigenCloud) listening on port ${PORT}`);
@@ -478,5 +489,10 @@ indexAndCachePaymentInfo().then(() => {
     console.log(`  Model: ${EIGENAI_MODEL}`);
     console.log(`  Confidence threshold: ${CONFIDENCE_THRESHOLD}`);
     console.log(`  PaymentInfos cached: ${paymentInfoCache.size}`);
+
+    // Poll for new on-chain disputes
+    setInterval(() => {
+      indexAndCachePaymentInfo().catch(() => {});
+    }, INDEX_INTERVAL_MS);
   });
 });

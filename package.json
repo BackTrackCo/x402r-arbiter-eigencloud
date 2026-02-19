@@ -31,11 +31,16 @@
     "@x402/core": "^2.3.0",
     "@x402/evm": "^2.3.0",
     "@x402r/client": "^0.0.2",
-    "@x402r/evm": "^0.0.1",
+    "@x402r/evm": "file:../x402r-scheme/packages/evm",
     "@x402r/helpers": "^0.0.2",
     "@x402r/merchant": "^0.0.2",
     "tsx": "^4.19.0",
     "typescript": "^5.0.0"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@x402/core@2.3.1": "patches/@x402__core@2.3.1.patch"
+    }
   },
   "engines": {
     "node": ">=20.0.0"

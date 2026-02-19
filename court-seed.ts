@@ -1,24 +1,35 @@
 /**
  * Seed Script for Court UI Testing
  *
- * Creates on-chain disputes with evidence so the court-ui dashboard has data to display.
- * Lighter than the full cli:e2e test — runs the on-chain setup, then spawns services.
+ * Performs on-chain payment, dispute, and evidence submission so you can
+ * watch it appear live in the arbiter dashboard.
+ *
+ * Uses only @x402r/* packages and viem — no cross-repo file imports.
  *
  * Usage:
- *   PRIVATE_KEY=0x... npm run seed
+ *   # Step 1: Deploy operator (first run only)
+ *   PRIVATE_KEY=0x... pnpm seed
+ *   # → deploys operator, prints OPERATOR_ADDRESS for arbiter startup
  *
- * Prerequisites:
- *   - Testnet ETH on the PRIVATE_KEY account (arbiter + EigenAI grant)
- *   - Testnet ETH + USDC on the mnemonic payer account (index 0)
- *   - Set NETWORK_ID in .env (default: eip155:84532 / Base Sepolia)
- *   - Run `pnpm install` in x402r-sdk/ first
+ *   # Step 2: Start arbiter separately (local or EigenCloud)
+ *   PRIVATE_KEY=0x... OPERATOR_ADDRESS=0x... pnpm dev
+ *
+ *   # Step 3: Re-run seed with existing operator + arbiter
+ *   PRIVATE_KEY=0x... OPERATOR_ADDRESS=0x... ARBITER_URL=http://localhost:3000 pnpm seed
+ *
+ * Env vars:
+ *   PRIVATE_KEY      — Required. Arbiter account (has EigenAI grant).
+ *   OPERATOR_ADDRESS — Optional. Skip deployment if already deployed.
+ *   ARBITER_URL      — Optional. Arbiter server URL for evaluation trigger.
+ *   MNEMONIC         — Optional. Override auto-generated mnemonic.
+ *   NETWORK_ID       — Optional. Default: eip155:84532 (Base Sepolia).
+ *   RPC_URL          — Optional. Override default RPC.
+ *   PINATA_JWT       — Optional. Pin evidence to IPFS (falls back to inline JSON).
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import {
   createPublicClient,
   createWalletClient,
@@ -26,34 +37,79 @@ import {
   erc20Abi,
   formatEther,
   formatUnits,
+  publicActions,
+  type Address,
+  type PublicClient,
 } from "viem";
+import { baseSepolia, sepolia } from "viem/chains";
+import type { Chain } from "viem";
 import { mnemonicToAccount, privateKeyToAccount, generateMnemonic } from "viem/accounts";
 import { english } from "viem/accounts";
-import { getNetworkConfig, resolveAddresses } from "@x402r/core";
 import {
-  StepRunner,
-  NETWORK_ID,
-  CHAIN,
-  RPC_URL,
-  PAYMENT_AMOUNT,
-  GAS_FUNDING,
-  USDC_ADDRESS,
-  checkAndLogBalances,
-  deployTestOperator,
-  setupHTTP402,
-  performHTTP402Payment,
-  createSDKInstances,
-  waitForTx,
-  type E2EAccounts,
+  deployMarketplaceOperator,
+  getNetworkConfig,
+  resolveAddresses,
+  computePaymentInfoHash,
+  toPaymentInfo,
+  toFacilitatorEvmSigner,
+  createInProcessFacilitator,
   type PaymentInfo,
-} from "../x402r-sdk/examples/e2e-test/shared.js";
+} from "@x402r/core";
+import { X402rClient } from "@x402r/client";
+import { X402rMerchant } from "@x402r/merchant";
+import { refundable } from "@x402r/helpers";
+import { x402Facilitator } from "@x402/core/facilitator";
+import {
+  x402ResourceServer,
+  x402HTTPResourceServer,
+  type HTTPResponseInstructions,
+} from "@x402/core/server";
+import { x402HTTPClient } from "@x402/core/http";
+import { x402Client } from "@x402/core/client";
+import { registerEscrowScheme as registerEscrowClientScheme } from "@x402r/evm/escrow/client";
+import { registerEscrowScheme as registerEscrowFacilitatorScheme } from "@x402r/evm/escrow/facilitator";
+import { registerEscrowServerScheme } from "@x402r/evm/escrow/server";
+import { isEscrowPayload } from "@x402r/evm/escrow/types";
+import type { EscrowPayload } from "@x402r/evm/escrow/types";
+import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { savePaymentState } from "./cli/src/state.js";
 
-// ============ Paths ============
+// ============ Config Constants ============
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = __dirname;
+const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:84532";
+const PAYMENT_AMOUNT = 10000n; // 0.01 USDC (6 decimals)
+
+const GAS_FUNDING_BY_NETWORK: Record<string, bigint> = {
+  "eip155:84532": 10000000000000n, // 0.00001 ETH (Base Sepolia — L2)
+  "eip155:11155111": 10000000000000000n, // 0.01 ETH (Ethereum Sepolia — L1)
+};
+const GAS_FUNDING = GAS_FUNDING_BY_NETWORK[NETWORK_ID] ?? 10000000000000000n;
+
+const CHAIN_CONFIGS: Record<string, { chain: Chain; usdc: Address; scanner: string }> = {
+  "eip155:84532": {
+    chain: baseSepolia,
+    usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address,
+    scanner: "https://sepolia.basescan.org",
+  },
+  "eip155:11155111": {
+    chain: sepolia,
+    usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as Address,
+    scanner: "https://sepolia.etherscan.io",
+  },
+};
+
+const chainConfig = CHAIN_CONFIGS[NETWORK_ID];
+if (!chainConfig) {
+  console.error(
+    `Unsupported NETWORK_ID: ${NETWORK_ID}. Supported: ${Object.keys(CHAIN_CONFIGS).join(", ")}`,
+  );
+  process.exit(1);
+}
+
+const CHAIN = chainConfig.chain;
+const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
+const USDC_ADDRESS = chainConfig.usdc;
+const ARBITER_URL = process.env.ARBITER_URL; // e.g. http://localhost:3000 or EigenCloud URL
 
 // ============ Environment ============
 
@@ -61,12 +117,11 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}` | undefined;
 
 if (!PRIVATE_KEY) {
   console.error("Error: PRIVATE_KEY environment variable is required");
-  console.error("Usage: PRIVATE_KEY=0x... npm run seed");
+  console.error("Usage: PRIVATE_KEY=0x... pnpm seed");
   process.exit(1);
 }
 
 // Generate a unique mnemonic on first run, persist it for address stability.
-// The Hardhat default mnemonic is publicly known — other users drain those accounts on testnets.
 const MNEMONIC_PATH = path.join(os.homedir(), ".x402r", "seed-mnemonic");
 function getOrCreateMnemonic(): string {
   if (process.env.MNEMONIC) return process.env.MNEMONIC;
@@ -84,7 +139,24 @@ const MNEMONIC = getOrCreateMnemonic();
 
 // ============ Helpers ============
 
-/** Serialize PaymentInfo bigint fields to strings for JSON output and API calls */
+function log(msg: string): void {
+  console.log(`  ${msg}`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForTx(publicClient: PublicClient, hash: `0x${string}`) {
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 });
+  if (receipt.status !== "success") {
+    throw new Error(`Transaction reverted: ${hash}`);
+  }
+  await sleep(2000);
+  return receipt;
+}
+
+/** Serialize PaymentInfo bigint fields to strings for JSON output */
 function serializePaymentInfo(pi: PaymentInfo): Record<string, unknown> {
   return {
     ...pi,
@@ -98,8 +170,7 @@ function serializePaymentInfo(pi: PaymentInfo): Record<string, unknown> {
 
 /**
  * Pin JSON to IPFS via Pinata.
- * Supports both legacy key pair (PINATA_API_KEY + PINATA_SECRET_KEY)
- * and JWT/V3 token (PINATA_JWT). Falls back to inline JSON.
+ * Falls back to inline JSON if no credentials are configured.
  */
 async function pinToIpfs(data: Record<string, unknown>): Promise<string> {
   const apiKey = process.env.PINATA_API_KEY;
@@ -137,34 +208,16 @@ async function pinToIpfs(data: Record<string, unknown>): Promise<string> {
   return IpfsHash;
 }
 
-/** Poll a URL until it returns 200, with retries */
-async function pollHealth(url: string, maxAttempts = 30): Promise<boolean> {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return true;
-    } catch {
-      // Server not ready yet
-    }
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  return false;
-}
-
 /**
  * Wrapper that catches "replacement transaction underpriced" and waits for
- * the pending txs to mine before retrying. Does NOT send cancel txs —
- * that makes things worse by creating more pending txs with high gas.
+ * the pending txs to mine before retrying.
  */
 async function withMempoolWait<T>(
   fn: () => Promise<T>,
-  accounts: E2EAccounts,
-  runner: { log: (msg: string) => void },
+  publicClient: PublicClient,
+  address: Address,
   maxWaitMinutes = 10,
 ): Promise<T> {
-  const { publicClient, payerAccount } = accounts;
-  const addr = payerAccount.address;
-
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await fn();
@@ -174,91 +227,31 @@ async function withMempoolWait<T>(
         throw err;
       }
 
-      const startNonce = await publicClient.getTransactionCount({ address: addr, blockTag: "latest" });
-      runner.log(`Pending txs blocking nonce ${startNonce}. Waiting for them to mine (attempt ${attempt + 1}/3)...`);
+      const startNonce = await publicClient.getTransactionCount({ address, blockTag: "latest" });
+      log(
+        `Pending txs blocking nonce ${startNonce}. Waiting for them to mine (attempt ${attempt + 1}/3)...`,
+      );
 
-      // Poll until nonce advances (meaning the blocking tx mined)
       const deadline = Date.now() + maxWaitMinutes * 60_000;
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 5000));
-        const current = await publicClient.getTransactionCount({ address: addr, blockTag: "latest" });
+        const current = await publicClient.getTransactionCount({ address, blockTag: "latest" });
         if (current > startNonce) {
-          runner.log(`Nonce advanced to ${current}. Retrying...`);
+          log(`Nonce advanced to ${current}. Retrying...`);
           break;
-        }
-        // Log progress every 30 seconds
-        if (Math.floor((Date.now() - deadline + maxWaitMinutes * 60_000) / 30_000) % 1 === 0) {
-          const elapsed = Math.floor((Date.now() - (deadline - maxWaitMinutes * 60_000)) / 1000);
-          if (elapsed % 30 === 0 && elapsed > 0) {
-            runner.log(`  Still waiting... nonce=${current} (${elapsed}s elapsed)`);
-          }
         }
       }
 
-      const finalNonce = await publicClient.getTransactionCount({ address: addr, blockTag: "latest" });
+      const finalNonce = await publicClient.getTransactionCount({ address, blockTag: "latest" });
       if (finalNonce === startNonce) {
         throw new Error(
           `Nonce ${startNonce} stuck for ${maxWaitMinutes} minutes. ` +
-          `Previous cancel txs may be blocking. Wait a few minutes and retry, ` +
-          `or use a fresh account.`,
+            `Wait a few minutes and retry, or use a fresh account.`,
         );
       }
     }
   }
-  // Should not reach here, but satisfy TypeScript
   return await fn();
-}
-
-// ============ Account Setup ============
-
-/**
- * Set up accounts:
- *   PRIVATE_KEY → arbiter (has EigenAI grant)
- *   Mnemonic index 0 → payer (user funds with ETH + USDC)
- *   Mnemonic index 1 → merchant (payer auto-funds with ETH)
- */
-async function setupAccounts(): Promise<E2EAccounts> {
-  const arbiterAccount = privateKeyToAccount(PRIVATE_KEY!);
-  const payerAccount = mnemonicToAccount(MNEMONIC, { addressIndex: 0 });
-  const merchantAccount = mnemonicToAccount(MNEMONIC, { addressIndex: 1 });
-
-  const publicClient = createPublicClient({
-    chain: CHAIN,
-    transport: http(RPC_URL),
-  });
-
-  const payerWallet = createWalletClient({
-    account: payerAccount,
-    chain: CHAIN,
-    transport: http(RPC_URL),
-  });
-
-  const merchantWallet = createWalletClient({
-    account: merchantAccount,
-    chain: CHAIN,
-    transport: http(RPC_URL),
-  });
-
-  const arbiterWallet = createWalletClient({
-    account: arbiterAccount,
-    chain: CHAIN,
-    transport: http(RPC_URL),
-  });
-
-  const networkConfig = getNetworkConfig(NETWORK_ID)!;
-  const addresses = resolveAddresses(NETWORK_ID);
-
-  return {
-    payerAccount,
-    merchantAccount,
-    arbiterAccount,
-    publicClient,
-    payerWallet,
-    merchantWallet,
-    arbiterWallet,
-    networkConfig,
-    addresses,
-  };
 }
 
 // ============ Main ============
@@ -268,136 +261,315 @@ async function main() {
   console.log(`║         Court UI Seed — ${CHAIN.name.padEnd(31)}║`);
   console.log("╚══════════════════════════════════════════════════════════╝");
 
-  const runner = new StepRunner();
-  const children: ChildProcess[] = [];
+  // ======== Phase 1: Setup Accounts ========
 
-  // Cleanup on exit
-  const cleanup = () => {
-    console.log("\nShutting down...");
-    for (const child of children) {
-      child.kill("SIGTERM");
-    }
-    process.exit(0);
-  };
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  console.log("\n── Phase 1: Setup Accounts ──\n");
 
-  // ======== Phase 1: On-chain Setup ========
+  // Role mapping:
+  //   PRIVATE_KEY → arbiter (has EigenAI grant)
+  //   Mnemonic index 0 → payer (user funds with ETH + USDC)
+  //   Mnemonic index 1 → merchant (payer auto-funds with ETH)
+  const arbiterAccount = privateKeyToAccount(PRIVATE_KEY!);
+  const payerAccount = mnemonicToAccount(MNEMONIC, { addressIndex: 0 });
+  const merchantAccount = mnemonicToAccount(MNEMONIC, { addressIndex: 1 });
 
-  console.log("\n── Phase 1: On-chain Setup ──\n");
+  const publicClient = createPublicClient({ chain: CHAIN, transport: http(RPC_URL) });
 
-  // Step 1: Setup accounts
-  runner.step("1. Setup Accounts");
-  const accounts = await setupAccounts();
-  runner.log(`Arbiter:  ${accounts.arbiterAccount!.address} (PRIVATE_KEY)`);
-  runner.log(`Payer:    ${accounts.payerAccount.address} (mnemonic[0])`);
-  runner.log(`Merchant: ${accounts.merchantAccount.address} (mnemonic[1])`);
+  const payerWallet = createWalletClient({
+    account: payerAccount,
+    chain: CHAIN,
+    transport: http(RPC_URL),
+  });
+  const merchantWallet = createWalletClient({
+    account: merchantAccount,
+    chain: CHAIN,
+    transport: http(RPC_URL),
+  });
+  const arbiterWallet = createWalletClient({
+    account: arbiterAccount,
+    chain: CHAIN,
+    transport: http(RPC_URL),
+  });
 
-  // Bootstrap payer from arbiter if needed (arbiter has ETH + USDC + EigenAI grant)
-  const payerEth = await accounts.publicClient.getBalance({ address: accounts.payerAccount.address });
-  const payerUsdc = await accounts.publicClient.readContract({
+  log(`Arbiter:  ${arbiterAccount.address} (PRIVATE_KEY)`);
+  log(`Payer:    ${payerAccount.address} (mnemonic[0])`);
+  log(`Merchant: ${merchantAccount.address} (mnemonic[1])`);
+
+  // Bootstrap payer from arbiter if needed
+  const payerEth = await publicClient.getBalance({ address: payerAccount.address });
+  const payerUsdc = await publicClient.readContract({
     address: USDC_ADDRESS,
     abi: erc20Abi,
     functionName: "balanceOf",
-    args: [accounts.payerAccount.address],
+    args: [payerAccount.address],
   });
-  const arbiterEth = await accounts.publicClient.getBalance({ address: accounts.arbiterAccount!.address });
-  const arbiterUsdc = await accounts.publicClient.readContract({
+  const arbiterEth = await publicClient.getBalance({ address: arbiterAccount.address });
+  const arbiterUsdc = await publicClient.readContract({
     address: USDC_ADDRESS,
     abi: erc20Abi,
     functionName: "balanceOf",
-    args: [accounts.arbiterAccount!.address],
+    args: [arbiterAccount.address],
   });
 
-  runner.log(`Arbiter:  ${formatEther(arbiterEth)} ETH / ${formatUnits(arbiterUsdc, 6)} USDC`);
-  runner.log(`Payer:    ${formatEther(payerEth)} ETH / ${formatUnits(payerUsdc, 6)} USDC`);
+  log(`Arbiter:  ${formatEther(arbiterEth)} ETH / ${formatUnits(arbiterUsdc, 6)} USDC`);
+  log(`Payer:    ${formatEther(payerEth)} ETH / ${formatUnits(payerUsdc, 6)} USDC`);
 
-  // Fund payer ETH from arbiter if low
-  const minPayerEth = GAS_FUNDING * 5n; // must match checkAndLogBalances threshold
+  const minPayerEth = GAS_FUNDING * 5n;
   if (payerEth < minPayerEth && arbiterEth > minPayerEth * 2n) {
-    runner.log("Bootstrapping payer with ETH from arbiter...");
-    const ethTx = await accounts.arbiterWallet!.sendTransaction({
-      to: accounts.payerAccount.address,
+    log("Bootstrapping payer with ETH from arbiter...");
+    const ethTx = await arbiterWallet.sendTransaction({
+      to: payerAccount.address,
       value: minPayerEth,
       chain: CHAIN,
-      account: accounts.arbiterAccount!,
+      account: arbiterAccount,
     });
-    await waitForTx(accounts.publicClient, ethTx);
-    runner.log(`  Sent ${formatEther(minPayerEth)} ETH to payer`);
+    await waitForTx(publicClient, ethTx);
+    log(`  Sent ${formatEther(minPayerEth)} ETH to payer`);
   }
 
-  // Fund payer USDC from arbiter if low
   if (payerUsdc < PAYMENT_AMOUNT && arbiterUsdc >= PAYMENT_AMOUNT) {
-    runner.log("Bootstrapping payer with USDC from arbiter...");
-    const usdcTx = await accounts.arbiterWallet!.writeContract({
+    log("Bootstrapping payer with USDC from arbiter...");
+    const usdcTx = await arbiterWallet.writeContract({
       address: USDC_ADDRESS,
       abi: erc20Abi,
       functionName: "transfer",
-      args: [accounts.payerAccount.address, PAYMENT_AMOUNT],
+      args: [payerAccount.address, PAYMENT_AMOUNT],
       chain: CHAIN,
-      account: accounts.arbiterAccount!,
+      account: arbiterAccount,
     });
-    await waitForTx(accounts.publicClient, usdcTx);
-    runner.log(`  Sent ${formatUnits(PAYMENT_AMOUNT, 6)} USDC to payer`);
+    await waitForTx(publicClient, usdcTx);
+    log(`  Sent ${formatUnits(PAYMENT_AMOUNT, 6)} USDC to payer`);
   }
 
-  await checkAndLogBalances(accounts, runner);
-
-  // Only fund merchant from payer — arbiter is self-funded (PRIVATE_KEY)
-  const MIN_BALANCE = GAS_FUNDING;
-  const needsFunding = async () => {
-    const mBal = await accounts.publicClient.getBalance({ address: accounts.merchantAccount.address });
-    return mBal < MIN_BALANCE;
-  };
-  if (await needsFunding()) {
+  // Fund merchant from payer
+  const merchantBal = await publicClient.getBalance({ address: merchantAccount.address });
+  if (merchantBal < GAS_FUNDING) {
     await withMempoolWait(
       async () => {
-        if (!(await needsFunding())) {
-          runner.log("Funding tx from previous run confirmed — skipping.");
+        const currentBal = await publicClient.getBalance({ address: merchantAccount.address });
+        if (currentBal >= GAS_FUNDING) {
+          log("Funding tx from previous run confirmed — skipping.");
           return;
         }
-        runner.log("Funding merchant with ETH for gas...");
-        const fundTx = await accounts.payerWallet.sendTransaction({
-          to: accounts.merchantAccount.address,
+        log("Funding merchant with ETH for gas...");
+        const fundTx = await payerWallet.sendTransaction({
+          to: merchantAccount.address,
           value: GAS_FUNDING,
           chain: CHAIN,
-          account: accounts.payerAccount,
+          account: payerAccount,
         });
-        await waitForTx(accounts.publicClient, fundTx);
-        runner.log(`  Funded merchant: ${fundTx}`);
+        await waitForTx(publicClient, fundTx);
+        log(`  Funded merchant: ${fundTx}`);
       },
-      accounts,
-      runner,
+      publicClient,
+      payerAccount.address,
     );
   } else {
-    runner.log("Merchant already funded — skipping.");
+    log("Merchant already funded — skipping.");
   }
-  runner.pass("Setup accounts and fund derived wallets");
+  log("Accounts ready");
 
-  // Step 2: Deploy operator
-  runner.step("2. Deploy Marketplace Operator");
-  const deployResult = await withMempoolWait(
-    () => deployTestOperator(accounts, runner),
-    accounts,
-    runner,
+  // ======== Phase 2: Deploy Operator ========
+
+  console.log("\n── Phase 2: Deploy Operator ──\n");
+
+  let operatorAddress: string;
+
+  if (process.env.OPERATOR_ADDRESS) {
+    operatorAddress = process.env.OPERATOR_ADDRESS;
+    log(`Using existing operator: ${operatorAddress}`);
+  } else {
+    const deployResult = await withMempoolWait(
+      () =>
+        deployMarketplaceOperator(payerWallet, publicClient, NETWORK_ID, {
+          feeRecipient: payerAccount.address,
+          arbiter: arbiterAccount.address,
+          escrowPeriodSeconds: 604800n,
+          freezeDurationSeconds: 259200n,
+          operatorFeeBps: 100n,
+        }),
+      publicClient,
+      payerAccount.address,
+    );
+
+    operatorAddress = deployResult.operatorAddress;
+    log(`Deployed operator: ${operatorAddress}`);
+    log(`  ${deployResult.summary.newDeployments} new, ${deployResult.summary.existingContracts} existing`);
+  }
+
+  // If no arbiter URL, print startup instructions and exit
+  if (!ARBITER_URL) {
+    console.log("\n╔══════════════════════════════════════════════════════════╗");
+    console.log("║              OPERATOR DEPLOYED — START ARBITER          ║");
+    console.log("╚══════════════════════════════════════════════════════════╝");
+    console.log("\n  Add to your .env:");
+    console.log(`  OPERATOR_ADDRESS=${operatorAddress}`);
+    console.log(`  DEFAULT_RECEIVER=${merchantAccount.address}`);
+    console.log("\n  Then start the arbiter + dashboard:\n");
+    console.log("  # Terminal 1: Arbiter server");
+    console.log("  pnpm dev\n");
+    console.log("  # Terminal 2: Dashboard");
+    console.log("  pnpm dashboard\n");
+    console.log("  # Terminal 3: Run seed");
+    console.log("  ARBITER_URL=http://localhost:3000 pnpm seed\n");
+    console.log("  # Or with EigenCloud arbiter:");
+    console.log("  ARBITER_URL=https://your-arbiter.eigencloud.io pnpm seed\n");
+    process.exit(0);
+  }
+
+  // Verify arbiter is reachable
+  log(`Checking arbiter at ${ARBITER_URL}...`);
+  try {
+    const healthRes = await fetch(`${ARBITER_URL}/health`);
+    if (!healthRes.ok) {
+      throw new Error(`Health check returned ${healthRes.status}`);
+    }
+    log(`Arbiter is live at ${ARBITER_URL}`);
+  } catch (err) {
+    console.error(`\nError: Arbiter not reachable at ${ARBITER_URL}`);
+    console.error(`  ${err instanceof Error ? err.message : err}`);
+    console.error("\n  Make sure the arbiter is running before running seed.");
+    process.exit(1);
+  }
+
+  // ======== Phase 3: HTTP 402 Payment ========
+
+  console.log("\n── Phase 3: HTTP 402 Payment ──\n");
+
+  // In-process facilitator
+  const facilitatorViemClient = createWalletClient({
+    account: payerAccount,
+    chain: CHAIN,
+    transport: http(RPC_URL),
+  }).extend(publicActions);
+
+  const signer = toFacilitatorEvmSigner(facilitatorViemClient);
+  const { client: facilitatorClient } = createInProcessFacilitator(new x402Facilitator(), fac =>
+    registerEscrowFacilitatorScheme(fac, {
+      signer: signer as Parameters<typeof registerEscrowFacilitatorScheme>[1]["signer"],
+      networks: NETWORK_ID,
+    }),
   );
-  const operatorAddress = deployResult.operatorAddress;
 
-  // Step 3: Setup HTTP 402 infrastructure
-  runner.step("3. Setup HTTP 402 Infrastructure");
-  const infra = await setupHTTP402(accounts, operatorAddress);
-  runner.pass("HTTP 402 infrastructure ready");
+  const resourceServer = new x402ResourceServer(
+    facilitatorClient as Parameters<typeof x402ResourceServer.prototype.constructor>[0],
+  );
+  registerEscrowServerScheme(resourceServer, { networks: NETWORK_ID });
+  await resourceServer.initialize();
 
-  // Step 4: Perform HTTP 402 payment
-  runner.step("4. HTTP 402 Payment Flow");
-  const { paymentInfo, escrowHash } = await withMempoolWait(
-    () => performHTTP402Payment(infra, accounts, runner),
-    accounts,
-    runner,
+  const routes = {
+    "/api/weather": {
+      accepts: refundable(
+        {
+          scheme: "escrow",
+          network: NETWORK_ID,
+          payTo: merchantAccount.address,
+          price: "$0.01",
+        },
+        operatorAddress as `0x${string}`,
+        { maxFeeBps: 10000 },
+      ),
+      description: "Weather API (seed test)",
+      mimeType: "application/json",
+    },
+  };
+  const httpServer = new x402HTTPResourceServer(resourceServer, routes);
+  await httpServer.initialize();
+
+  const paymentClient = new x402Client();
+  registerEscrowClientScheme(paymentClient, {
+    signer: payerAccount,
+    networks: NETWORK_ID,
+  });
+  const httpClient = new x402HTTPClient(paymentClient);
+
+  // Unpaid request → 402
+  const unpaidContext = {
+    adapter: {
+      getHeader: (_name: string) => undefined,
+      getMethod: () => "GET",
+      getPath: () => "/api/weather",
+      getUrl: () => "https://e2e-test.local/api/weather",
+      getAcceptHeader: () => "application/json",
+      getUserAgent: () => "x402r-seed/1.0",
+    },
+    path: "/api/weather",
+    method: "GET",
+  };
+
+  const unpaidResult = await httpServer.processHTTPRequest(unpaidContext);
+  if (unpaidResult.type !== "payment-error") {
+    throw new Error(`Expected payment-error, got ${unpaidResult.type}`);
+  }
+  const initial402 = (unpaidResult as { type: "payment-error"; response: HTTPResponseInstructions })
+    .response;
+  if (initial402.status !== 402) {
+    throw new Error(`Expected 402 status, got ${initial402.status}`);
+  }
+  log("Unpaid request returns 402");
+
+  const paymentRequired = httpClient.getPaymentRequiredResponse(
+    name => initial402.headers[name],
+    initial402.body,
+  );
+  const paymentPayload = await httpClient.createPaymentPayload(paymentRequired);
+  const requestHeaders = httpClient.encodePaymentSignatureHeader(paymentPayload);
+  log("Payment payload created");
+
+  // Paid request → verify + settle
+  const paidContext = {
+    adapter: {
+      getHeader: (name: string) =>
+        requestHeaders[name] ?? requestHeaders[name.toUpperCase()] ?? undefined,
+      getMethod: () => "GET",
+      getPath: () => "/api/weather",
+      getUrl: () => "https://e2e-test.local/api/weather",
+      getAcceptHeader: () => "application/json",
+      getUserAgent: () => "x402r-seed/1.0",
+    },
+    path: "/api/weather",
+    method: "GET",
+  };
+
+  const paidResult = await httpServer.processHTTPRequest(paidContext);
+  if (paidResult.type !== "payment-verified") {
+    const errMsg =
+      paidResult.type === "payment-error"
+        ? JSON.stringify((paidResult as { response: HTTPResponseInstructions }).response)
+        : paidResult.type;
+    throw new Error(`Expected payment-verified, got: ${errMsg}`);
+  }
+  log("Payment verified");
+
+  const { paymentPayload: verifiedPayload, paymentRequirements: verifiedRequirements } =
+    paidResult as {
+      type: "payment-verified";
+      paymentPayload: PaymentPayload;
+      paymentRequirements: PaymentRequirements;
+    };
+
+  const settlementResult = await httpServer.processSettlement(
+    verifiedPayload,
+    verifiedRequirements,
+  );
+  if (!settlementResult.success) {
+    throw new Error(`Settlement failed: ${settlementResult.errorReason}`);
+  }
+  await waitForTx(publicClient, settlementResult.transaction as `0x${string}`);
+  log(`Settled on-chain: ${settlementResult.transaction}`);
+
+  // Extract PaymentInfo
+  if (!isEscrowPayload(verifiedPayload.payload)) {
+    throw new Error("Verified payload is not an EscrowPayload");
+  }
+  const paymentInfo = toPaymentInfo(verifiedPayload.payload as EscrowPayload);
+  const networkConfig = getNetworkConfig(NETWORK_ID)!;
+  const escrowHash = computePaymentInfoHash(
+    networkConfig.chainId,
+    networkConfig.authCaptureEscrow as Address,
+    paymentInfo,
   );
 
-  // Step 5: Save payment state (for CLI compatibility)
-  runner.step("5. Save Payment State");
   savePaymentState({
     paymentInfo,
     operatorAddress,
@@ -405,24 +577,48 @@ async function main() {
     timestamp: new Date().toISOString(),
     networkId: NETWORK_ID,
   });
-  runner.pass("Payment state saved to ~/.x402r/last-payment.json");
+  log("Payment state saved to ~/.x402r/last-payment.json");
 
-  // Step 6: Create dispute (request refund)
-  runner.step("6. Request Refund (Create Dispute)");
-  // Wait for RPC nonce to catch up after rapid settlement txs
-  runner.log("Waiting for RPC state propagation...");
-  await new Promise(r => setTimeout(r, 5000));
-  const { client, merchant, arbiter: arbiterSdk } = createSDKInstances(accounts, operatorAddress);
+  // ======== Phase 4: Create Dispute + Evidence ========
+
+  console.log("\n── Phase 4: Create Dispute + Evidence ──\n");
+
+  log("Waiting for RPC state propagation...");
+  await sleep(5000);
+
+  const addresses = resolveAddresses(NETWORK_ID);
+  const opAddr = operatorAddress as Address;
+
+  const client = new X402rClient({
+    publicClient,
+    walletClient: payerWallet,
+    operatorAddress: opAddr,
+    escrowAddress: addresses.escrowAddress,
+    refundRequestAddress: addresses.refundRequestAddress,
+    refundRequestEvidenceAddress: addresses.evidenceAddress,
+    chainId: addresses.chainId,
+  });
+
+  const merchant = new X402rMerchant({
+    publicClient,
+    walletClient: merchantWallet,
+    operatorAddress: opAddr,
+    escrowAddress: addresses.escrowAddress,
+    refundRequestAddress: addresses.refundRequestAddress,
+    refundRequestEvidenceAddress: addresses.evidenceAddress,
+    chainId: addresses.chainId,
+  });
+
+  // Request refund
   const { txHash: refundTx } = await withMempoolWait(
     () => client.requestRefund(paymentInfo, PAYMENT_AMOUNT, 0n),
-    accounts,
-    runner,
+    publicClient,
+    payerAccount.address,
   );
-  await waitForTx(accounts.publicClient, refundTx);
-  runner.pass("Refund request submitted (nonce=0)", refundTx);
+  await waitForTx(publicClient, refundTx);
+  log(`Refund requested: ${refundTx}`);
 
-  // Step 7: Submit payer evidence
-  runner.step("7. Submit Payer Evidence");
+  // Payer evidence
   const payerCid = await pinToIpfs({
     type: "payer-refund-request",
     reason: "API returned stale weather data despite payment",
@@ -442,31 +638,30 @@ async function main() {
     },
     expectedBehavior: "Real-time data updated within 5 minutes per service SLA",
   });
-  runner.log(`Evidence CID: ${payerCid}`);
-  const { txHash: evidenceTx } = await withMempoolWait(
+  log(`Payer evidence CID: ${payerCid.slice(0, 40)}...`);
+  const { txHash: payerEvidenceTx } = await withMempoolWait(
     () => client.submitEvidence(paymentInfo, 0n, payerCid),
-    accounts,
-    runner,
+    publicClient,
+    payerAccount.address,
   );
-  await waitForTx(accounts.publicClient, evidenceTx);
-  runner.pass("Payer evidence submitted", evidenceTx);
+  await waitForTx(publicClient, payerEvidenceTx);
+  log(`Payer evidence submitted: ${payerEvidenceTx}`);
 
-  // Step 8: Submit merchant evidence
-  runner.step("8. Submit Merchant Evidence");
-  // Merchant gas is drained by settlement — top up from payer
-  const EVIDENCE_GAS = 30000000000000000n; // 0.03 ETH — enough for submitEvidence on L1
-  const merchantBal = await accounts.publicClient.getBalance({ address: accounts.merchantAccount.address });
-  if (merchantBal < EVIDENCE_GAS) {
-    runner.log(`Merchant balance: ${merchantBal} wei — topping up...`);
-    const topUpTx = await accounts.payerWallet.sendTransaction({
-      to: accounts.merchantAccount.address,
+  // Top up merchant gas if needed
+  const EVIDENCE_GAS = 30000000000000000n; // 0.03 ETH
+  const merchantBalAfter = await publicClient.getBalance({ address: merchantAccount.address });
+  if (merchantBalAfter < EVIDENCE_GAS) {
+    log("Topping up merchant for evidence tx...");
+    const topUpTx = await payerWallet.sendTransaction({
+      to: merchantAccount.address,
       value: EVIDENCE_GAS,
       chain: CHAIN,
-      account: accounts.payerAccount,
+      account: payerAccount,
     });
-    await waitForTx(accounts.publicClient, topUpTx);
-    runner.log("Merchant topped up");
+    await waitForTx(publicClient, topUpTx);
   }
+
+  // Merchant evidence
   const merchantCid = await pinToIpfs({
     type: "merchant-response",
     response: "API was functioning correctly — stale timestamp was a display bug, not a data issue",
@@ -490,62 +685,22 @@ async function main() {
     bugTicket: "WEATHER-4821",
     patchDeployed: "2026-02-18T20:15:00Z",
   });
-  runner.log(`Evidence CID: ${merchantCid}`);
+  log(`Merchant evidence CID: ${merchantCid.slice(0, 40)}...`);
   const { txHash: merchantEvidenceTx } = await withMempoolWait(
     () => merchant.submitEvidence(paymentInfo, 0n, merchantCid),
-    accounts,
-    runner,
+    publicClient,
+    merchantAccount.address,
   );
-  await waitForTx(accounts.publicClient, merchantEvidenceTx);
-  runner.pass("Merchant evidence submitted", merchantEvidenceTx);
+  await waitForTx(publicClient, merchantEvidenceTx);
+  log(`Merchant evidence submitted: ${merchantEvidenceTx}`);
 
-  // ======== Phase 2: Start Services ========
+  // ======== Phase 5: Trigger Arbiter Evaluation ========
 
-  console.log("\n── Phase 2: Start Services ──\n");
+  console.log("\n── Phase 5: Trigger Arbiter Evaluation ──\n");
 
-  // Step 9: Start arbiter server
-  runner.step("9. Start Arbiter Server");
-  const arbiterProcess = spawn("npx", ["tsx", "src/index.ts"], {
-    cwd: PROJECT_ROOT,
-    env: {
-      ...process.env,
-      PRIVATE_KEY: PRIVATE_KEY!,
-      OPERATOR_ADDRESS: operatorAddress,
-      DEFAULT_RECEIVER: accounts.merchantAccount.address,
-      PORT: "3000",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  children.push(arbiterProcess);
-
-  arbiterProcess.stdout?.on("data", (data: Buffer) => {
-    process.stdout.write(`[arbiter] ${data}`);
-  });
-  arbiterProcess.stderr?.on("data", (data: Buffer) => {
-    process.stderr.write(`[arbiter] ${data}`);
-  });
-
-  runner.log("Waiting for arbiter server...");
-  const healthy = await pollHealth("http://localhost:3000/health");
-  if (!healthy) {
-    console.error("Error: Arbiter server did not start within 30 seconds");
-    cleanup();
-  }
-  runner.pass("Arbiter server running on :3000");
-
-  // Cache paymentInfo in the arbiter server so the dashboard can auto-load it
-  runner.log("Caching paymentInfo in arbiter server...");
-  await fetch("http://localhost:3000/api/payment-info", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(serializePaymentInfo(paymentInfo)),
-  });
-
-  // Step 10: Trigger AI evaluation (optional — requires EigenAI access)
-  runner.step("10. Trigger AI Evaluation (optional)");
-  let evalSucceeded = false;
+  log("Triggering AI evaluation...");
   try {
-    const evalRes = await fetch("http://localhost:3000/api/evaluate", {
+    const evalRes = await fetch(`${ARBITER_URL}/api/evaluate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -559,110 +714,35 @@ async function main() {
         confidence: number;
         decisionTx?: string;
       };
-      runner.log(`Decision: ${evalData.decision} (confidence: ${evalData.confidence})`);
+      log(`AI decision: ${evalData.decision} (confidence: ${evalData.confidence})`);
       if (evalData.decisionTx) {
-        runner.log(`Decision tx: ${evalData.decisionTx}`);
-        evalSucceeded = true;
+        log(`  Decision tx: ${evalData.decisionTx}`);
       }
-      runner.pass("AI evaluation completed");
     } else {
       const errText = await evalRes.text();
-      runner.log(`Evaluation returned ${evalRes.status}: ${errText}`);
+      log(`Evaluation returned ${evalRes.status}: ${errText}`);
     }
   } catch (err) {
-    runner.log(`Evaluation failed: ${err}`);
+    log(`Evaluation failed: ${err}`);
   }
 
-  // Step 10b: Ensure on-chain ruling exists (fallback if evaluate didn't update status)
-  if (!evalSucceeded && arbiterSdk) {
-    runner.step("10b. Direct Ruling (fallback)");
-    // Pick approve or deny randomly so the dashboard shows a mix
-    const fallbackApprove = Math.random() > 0.5;
-    const fallbackDecision = fallbackApprove ? "approve" : "deny";
-    const fallbackConfidence = +(0.6 + Math.random() * 0.3).toFixed(2);
+  // ======== Done ========
 
-    // Submit arbiter evidence so the dashboard has something to show
-    const fallbackEvidence = JSON.stringify({
-      type: "arbiter-ruling",
-      decision: fallbackDecision,
-      reasoning: fallbackApprove
-        ? "Based on the evidence provided, the payer's complaint about stale data is substantiated by the timestamp discrepancy. The merchant's bug explanation, while plausible, does not change the fact that the service SLA was not visibly met from the payer's perspective."
-        : "The merchant provided credible evidence that the underlying data was fresh despite the display bug. The payer's complaint is based on a UI timestamp rather than actual data quality, and the weather discrepancy is explained by local micro-climate variation.",
-      confidence: fallbackConfidence,
-      commitment: { note: "Fallback ruling — EigenAI unavailable" },
-      model: "fallback",
-    });
-    try {
-      const { txHash: evidenceTx } = await arbiterSdk.submitEvidence(paymentInfo, 0n, fallbackEvidence);
-      await waitForTx(accounts.publicClient, evidenceTx);
-      runner.log("Arbiter evidence submitted");
-    } catch (err) {
-      runner.log(`Evidence submission failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    // Submit on-chain ruling
-    try {
-      if (fallbackApprove) {
-        const { txHash: approveTx } = await arbiterSdk.approveRefundRequest(paymentInfo, 0n);
-        await waitForTx(accounts.publicClient, approveTx);
-        runner.pass(`Refund approved on-chain (fallback, confidence=${fallbackConfidence})`, approveTx);
-      } else {
-        const { txHash: denyTx } = await arbiterSdk.denyRefundRequest(paymentInfo, 0n);
-        await waitForTx(accounts.publicClient, denyTx);
-        runner.pass(`Refund denied on-chain (fallback, confidence=${fallbackConfidence})`, denyTx);
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      runner.log(`Direct ruling failed: ${errMsg}`);
-      runner.log("Status will remain PENDING — check arbiter authorization");
-    }
-  }
-
-  // Step 11: Start dashboard
-  runner.step("11. Start Dashboard");
-  const dashboardProcess = spawn("npm", ["run", "dev"], {
-    cwd: path.resolve(PROJECT_ROOT, "court-ui"),
-    env: { ...process.env, NEXT_PUBLIC_ARBITER_URL: "http://localhost:3000" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  children.push(dashboardProcess);
-
-  dashboardProcess.stdout?.on("data", (data: Buffer) => {
-    process.stdout.write(`[dashboard] ${data}`);
-  });
-  dashboardProcess.stderr?.on("data", (data: Buffer) => {
-    process.stderr.write(`[dashboard] ${data}`);
-  });
-
-  // Give dashboard a moment to start
-  await new Promise(r => setTimeout(r, 3000));
-  runner.pass("Dashboard starting on :3001");
-
-  // ======== Phase 3: Output ========
-
-  console.log("\n── Phase 3: Ready ──\n");
-
-  console.log("╔══════════════════════════════════════════════════════════╗");
+  console.log("\n╔══════════════════════════════════════════════════════════╗");
   console.log("║                    SEED COMPLETE                        ║");
   console.log("╚══════════════════════════════════════════════════════════╝");
 
   console.log("\n  Operator address:", operatorAddress);
-  console.log("  Arbiter address: ", accounts.arbiterAccount!.address);
-  console.log("  Merchant address:", accounts.merchantAccount.address);
-  console.log("  Payer address:   ", accounts.payerAccount.address);
+  console.log("  Arbiter address: ", arbiterAccount.address);
+  console.log("  Merchant address:", merchantAccount.address);
+  console.log("  Payer address:   ", payerAccount.address);
+  console.log("  Network:         ", `${CHAIN.name} (${NETWORK_ID})`);
+  console.log("  Arbiter URL:     ", ARBITER_URL);
+  console.log("  Dashboard:       ", "http://localhost:3001");
 
-  console.log("\n  PaymentInfo JSON (paste into dashboard):");
+  console.log("\n  PaymentInfo JSON:");
   console.log("  ─────────────────────────────────────────");
   console.log(JSON.stringify(serializePaymentInfo(paymentInfo), null, 2));
-
-  console.log("\n  URLs:");
-  console.log("  Arbiter health: http://localhost:3000/health");
-  console.log("  Dashboard:      http://localhost:3001");
-
-  console.log("\n  Press Ctrl+C to stop all services.\n");
-
-  // Keep alive — child processes stay running until Ctrl+C
-  await new Promise(() => {});
 }
 
 main().catch(error => {

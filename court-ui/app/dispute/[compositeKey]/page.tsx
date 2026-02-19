@@ -22,31 +22,39 @@ export default function DisputeDetailPage() {
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
 
+  // Track the resolved paymentInfo so polling can reuse it
+  const [paymentInfo, setPaymentInfo] = useState<Record<string, unknown> | null>(null);
+
   const loadEvidence = useCallback(
-    async (paymentInfo: Record<string, unknown>, nonce: string) => {
-      setEvidenceLoading(true);
-      setEvidenceError(null);
+    async (pi: Record<string, unknown>, nonce: string, background = false) => {
+      if (!background) {
+        setEvidenceLoading(true);
+        setEvidenceError(null);
+      }
       try {
-        const result = await getEvidenceBatch(paymentInfo, BigInt(nonce));
+        const result = await getEvidenceBatch(pi, BigInt(nonce));
         setEvidence(result.entries);
+        setPaymentInfo(pi);
       } catch (err) {
-        setEvidenceError(
-          err instanceof Error ? err.message : "Failed to load evidence",
-        );
+        if (!background) {
+          setEvidenceError(
+            err instanceof Error ? err.message : "Failed to load evidence",
+          );
+        }
       } finally {
-        setEvidenceLoading(false);
+        if (!background) setEvidenceLoading(false);
       }
     },
     [],
   );
 
+  // Initial load
   useEffect(() => {
     if (!compositeKey) return;
     fetchDispute(compositeKey)
       .then(async (d) => {
         setDispute(d);
         setLoading(false);
-        // Auto-load evidence if server has cached paymentInfo
         const cached = await fetchPaymentInfo(d.paymentInfoHash);
         if (cached) {
           loadEvidence(cached, d.nonce);
@@ -54,6 +62,25 @@ export default function DisputeDetailPage() {
       })
       .catch(() => setLoading(false));
   }, [compositeKey, loadEvidence]);
+
+  // Poll for dispute status changes + new evidence
+  useEffect(() => {
+    if (!compositeKey) return;
+    const interval = setInterval(async () => {
+      try {
+        const d = await fetchDispute(compositeKey);
+        setDispute(d);
+        // Try to load evidence if we have paymentInfo, or try fetching it
+        const pi = paymentInfo ?? await fetchPaymentInfo(d.paymentInfoHash);
+        if (pi) {
+          loadEvidence(pi, d.nonce, true);
+        }
+      } catch {
+        // ignore poll errors
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [compositeKey, paymentInfo, loadEvidence]);
 
   if (loading) {
     return (
@@ -110,7 +137,7 @@ export default function DisputeDetailPage() {
             </p>
             <p>{formatAmount(dispute.amount)} USDC</p>
           </div>
-          <div>
+          {(dispute.status === 1 || dispute.status === 2) && <div>
             <p className="text-muted-foreground uppercase tracking-wider mb-0.5">
               ACTIONS
             </p>
@@ -120,7 +147,7 @@ export default function DisputeDetailPage() {
             >
               Verify Ruling
             </Link>
-          </div>
+          </div>}
         </div>
       </section>
 

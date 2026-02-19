@@ -1,0 +1,52 @@
+diff --git a/dist/cjs/server/index.js b/dist/cjs/server/index.js
+index 1234567..abcdefg 100644
+--- a/dist/cjs/server/index.js
++++ b/dist/cjs/server/index.js
+@@ -596,7 +596,8 @@ var x402ResourceServer = class {
+         payTo: resolvedPayTo,
+         price: resolvedPrice,
+         network: option.network,
+-        maxTimeoutSeconds: option.maxTimeoutSeconds
++        maxTimeoutSeconds: option.maxTimeoutSeconds,
++        extra: option.extra
+       };
+       const requirements = await this.buildPaymentRequirements(resourceConfig);
+       allRequirements.push(...requirements);
+diff --git a/dist/esm/server/index.mjs b/dist/esm/server/index.mjs
+index 1234567..abcdefg 100644
+--- a/dist/esm/server/index.mjs
++++ b/dist/esm/server/index.mjs
+@@ -331,7 +331,8 @@ var x402ResourceServer = class {
+         payTo: resolvedPayTo,
+         price: resolvedPrice,
+         network: option.network,
+-        maxTimeoutSeconds: option.maxTimeoutSeconds
++        maxTimeoutSeconds: option.maxTimeoutSeconds,
++        extra: option.extra
+       };
+       const requirements = await this.buildPaymentRequirements(resourceConfig);
+       allRequirements.push(...requirements);
+diff --git a/dist/cjs/mechanisms-B7u6Mbd7.d.ts b/dist/cjs/mechanisms-B7u6Mbd7.d.ts
+index 1234567..abcdefg 100644
+--- a/dist/cjs/mechanisms-B7u6Mbd7.d.ts
++++ b/dist/cjs/mechanisms-B7u6Mbd7.d.ts
+@@ -367,6 +367,7 @@ declare class x402ResourceServer {
+         price: Price | ((context: TContext) => Price | Promise<Price>);
+         network: Network;
+         maxTimeoutSeconds?: number;
++        extra?: Record<string, unknown>;
+     }>, context: TContext): Promise<PaymentRequirements[]>;
+     /**
+      * Create a payment required response
+diff --git a/dist/esm/mechanisms-B7u6Mbd7.d.mts b/dist/esm/mechanisms-B7u6Mbd7.d.mts
+index 1234567..abcdefg 100644
+--- a/dist/esm/mechanisms-B7u6Mbd7.d.mts
++++ b/dist/esm/mechanisms-B7u6Mbd7.d.mts
+@@ -367,6 +367,7 @@ declare class x402ResourceServer {
+         price: Price | ((context: TContext) => Price | Promise<Price>);
+         network: Network;
+         maxTimeoutSeconds?: number;
++        extra?: Record<string, unknown>;
+     }>, context: TContext): Promise<PaymentRequirements[]>;
+     /**
+      * Create a payment required response

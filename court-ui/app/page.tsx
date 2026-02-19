@@ -29,13 +29,17 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchHealth()
-      .then(setHealth)
-      .catch((err) => setHealthError(err.message));
+    const poll = () =>
+      fetchHealth()
+        .then((h) => { setHealth(h); setHealthError(null); })
+        .catch((err) => setHealthError(err.message));
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => clearInterval(interval);
   }, []);
 
-  const loadDisputes = useCallback(async (newOffset: number) => {
-    setLoading(true);
+  const loadDisputes = useCallback(async (newOffset: number, background = false) => {
+    if (!background) setLoading(true);
     try {
       const list = await fetchDisputes(newOffset, PAGE_SIZE);
       setTotal(Number(list.total));
@@ -51,13 +55,18 @@ export default function Dashboard() {
     } catch {
       // arbiter server may be offline
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadDisputes(0);
   }, [loadDisputes]);
+
+  useEffect(() => {
+    const interval = setInterval(() => loadDisputes(offset, true), 5000);
+    return () => clearInterval(interval);
+  }, [loadDisputes, offset]);
 
   return (
     <div className="space-y-6">

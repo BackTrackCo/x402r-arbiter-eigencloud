@@ -18,11 +18,16 @@ import { english } from "viem/accounts";
 import { baseSepolia, base, sepolia } from "viem/chains";
 import { X402rArbiter } from "@x402r/arbiter";
 import {
+  keccak256,
+  encodePacked,
+} from "viem";
+import {
   resolveAddresses,
   parsePaymentInfo,
-  indexPaymentInfoFromEvents,
   resolveEvidenceContent,
   deployMarketplaceOperator,
+  computePaymentInfoHash,
+  RefundRequestABI,
   type PaymentInfo,
 } from "@x402r/core";
 import { createCommitment } from "./commitment.js";
@@ -133,17 +138,31 @@ const eigenai = new EigenAIClient(account, EIGENAI_GRANT_SERVER, EIGENAI_MODEL);
 // --- PaymentInfo cache (hash → serialized PaymentInfo) ---
 const paymentInfoCache = new Map<string, Record<string, unknown>>();
 
-/** Index RefundRequested events to auto-populate paymentInfo cache */
+// --- Global ordered dispute keys (newest first, from on-chain events) ---
+let orderedDisputeKeys: Hex[] = [];
+const MAX_BLOCK_RANGE = 50000n;
+
+/** Index RefundRequested events to populate paymentInfo cache + ordered dispute keys */
 async function indexAndCachePaymentInfo() {
   try {
     const prevSize = paymentInfoCache.size;
-    const indexed = await indexPaymentInfoFromEvents({
-      publicClient: publicClient as any,
-      escrowAddress: addresses.escrowAddress as `0x${string}`,
-      chainId: CHAIN_ID,
-      refundRequestAddress: addresses.refundRequestAddress as `0x${string}`,
+    const toBlock = await publicClient.getBlockNumber();
+    const fromBlock = toBlock > MAX_BLOCK_RANGE ? toBlock - MAX_BLOCK_RANGE : 0n;
+
+    const logs = await publicClient.getContractEvents({
+      address: addresses.refundRequestAddress as `0x${string}`,
+      abi: RefundRequestABI,
+      eventName: "RefundRequested",
+      fromBlock,
+      toBlock,
     });
-    for (const [hash, pi] of indexed) {
+
+    const keys: Hex[] = [];
+    for (const log of logs) {
+      const args = log.args as any;
+      if (!args.paymentInfo) continue;
+
+      const pi = args.paymentInfo;
       const serialized: Record<string, unknown> = {
         operator: pi.operator,
         payer: pi.payer,
@@ -158,8 +177,35 @@ async function indexAndCachePaymentInfo() {
         feeReceiver: pi.feeReceiver,
         salt: String(pi.salt),
       };
+
+      // Compute paymentInfoHash and composite key
+      const paymentInfo: PaymentInfo = {
+        operator: pi.operator,
+        payer: pi.payer,
+        receiver: pi.receiver,
+        token: pi.token,
+        maxAmount: pi.maxAmount,
+        preApprovalExpiry: pi.preApprovalExpiry,
+        authorizationExpiry: pi.authorizationExpiry,
+        refundExpiry: pi.refundExpiry,
+        minFeeBps: pi.minFeeBps,
+        maxFeeBps: pi.maxFeeBps,
+        feeReceiver: pi.feeReceiver,
+        salt: pi.salt,
+      };
+      const hash = computePaymentInfoHash(CHAIN_ID, addresses.escrowAddress as `0x${string}`, paymentInfo);
+      const nonce = args.nonce as bigint;
+      const compositeKey = keccak256(
+        encodePacked(["bytes32", "uint256"], [hash, nonce]),
+      );
+
       paymentInfoCache.set(hash, serialized);
+      keys.push(compositeKey);
     }
+
+    // Events are in block order (oldest first) — reverse for newest first
+    orderedDisputeKeys = keys.reverse();
+
     if (paymentInfoCache.size > prevSize) {
       console.log(
         `Indexed ${paymentInfoCache.size} paymentInfos (+${paymentInfoCache.size - prevSize} new)`,
@@ -396,48 +442,14 @@ app.post("/api/evaluate", async (req, res) => {
   }
 });
 
-// --- List disputes (across all known receivers, newest first) ---
+// --- List disputes (globally ordered newest-first from on-chain events) ---
 app.get("/api/disputes", async (req, res) => {
   try {
-    const receiverParam = req.query.receiver as Address | undefined;
     const offset = parseInt(req.query.offset?.toString() ?? "0", 10);
     const count = parseInt(req.query.count?.toString() ?? "20", 10);
 
-    // If a specific receiver is requested, query just that one
-    if (receiverParam) {
-      const result = await arbiter.getReceiverRefundRequests(
-        BigInt(offset), BigInt(count), receiverParam, { order: "newest" },
-      );
-      res.json({
-        keys: result.keys,
-        total: result.total.toString(),
-        offset: String(offset),
-        count: String(count),
-      });
-      return;
-    }
-
-    // Otherwise, aggregate disputes across all receivers from the cache
-    const receivers = new Set<Address>();
-    for (const pi of paymentInfoCache.values()) {
-      if (pi.receiver) receivers.add(pi.receiver as Address);
-    }
-
-    const allKeys: string[] = [];
-    for (const receiver of receivers) {
-      try {
-        const result = await arbiter.getReceiverRefundRequests(
-          0n, 1000n, receiver, { order: "newest" },
-        );
-        allKeys.push(...result.keys);
-      } catch {
-        // skip receivers that fail
-      }
-    }
-
-    // Paginate the aggregated results
-    const total = allKeys.length;
-    const page = allKeys.slice(offset, offset + count);
+    const total = orderedDisputeKeys.length;
+    const page = orderedDisputeKeys.slice(offset, offset + count);
 
     res.json({
       keys: page,

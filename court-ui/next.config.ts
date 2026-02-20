@@ -1,9 +1,15 @@
 import type { NextConfig } from "next";
-import path from "path";
+
+const arbiterUrl = process.env.ARBITER_BACKEND_URL || "http://34.148.88.195:3000";
 
 const nextConfig: NextConfig = {
-  turbopack: {
-    root: path.resolve(__dirname),
+  async rewrites() {
+    return [
+      {
+        source: "/arbiter/:path*",
+        destination: `${arbiterUrl}/:path*`,
+      },
+    ];
   },
 };
 

@@ -1,7 +1,6 @@
-const ARBITER_URL = process.env.NEXT_PUBLIC_ARBITER_URL;
-if (!ARBITER_URL) {
-  throw new Error("NEXT_PUBLIC_ARBITER_URL environment variable is required");
-}
+// When deployed on Vercel, requests go through Next.js rewrites (/arbiter/* → backend).
+// For local dev, NEXT_PUBLIC_ARBITER_URL can point directly at the arbiter.
+const ARBITER_URL = process.env.NEXT_PUBLIC_ARBITER_URL || "/arbiter";
 
 export interface HealthResponse {
   status: string;

@@ -24,6 +24,7 @@
  *   MNEMONIC         — Optional. Override auto-generated mnemonic.
  *   NETWORK_ID       — Optional. Default: eip155:84532 (Base Sepolia).
  *   RPC_URL          — Optional. Override default RPC.
+ *   FACILITATOR_URL  — Optional. Remote facilitator (e.g. https://facilitator.ultravioletadao.xyz).
  *   PINATA_JWT       — Optional. Pin evidence to IPFS (falls back to inline JSON).
  */
 
@@ -55,6 +56,7 @@ import {
   createInProcessFacilitator,
   type PaymentInfo,
 } from "@x402r/core";
+import { HTTPFacilitatorClient } from "@x402/core/server";
 import { X402rClient } from "@x402r/client";
 import { X402rMerchant } from "@x402r/merchant";
 import { refundable } from "@x402r/helpers";
@@ -110,6 +112,7 @@ const CHAIN = chainConfig.chain;
 const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
 const USDC_ADDRESS = chainConfig.usdc;
 const ARBITER_URL = process.env.ARBITER_URL; // e.g. http://localhost:3000 or EigenCloud URL
+const FACILITATOR_URL = process.env.FACILITATOR_URL; // e.g. https://facilitator.ultravioletadao.xyz
 
 // ============ Environment ============
 
@@ -436,24 +439,31 @@ async function main() {
 
   console.log("\n── Phase 3: HTTP 402 Payment ──\n");
 
-  // In-process facilitator
-  const facilitatorViemClient = createWalletClient({
-    account: payerAccount,
-    chain: CHAIN,
-    transport: http(RPC_URL),
-  }).extend(publicActions);
+  // Facilitator — remote HTTP or in-process fallback
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let facilitatorClient: any;
+  if (FACILITATOR_URL) {
+    log(`Using remote facilitator: ${FACILITATOR_URL}`);
+    facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
+  } else {
+    log("Using in-process facilitator (payer wallet as signer)");
+    const facilitatorViemClient = createWalletClient({
+      account: payerAccount,
+      chain: CHAIN,
+      transport: http(RPC_URL),
+    }).extend(publicActions);
 
-  const signer = toFacilitatorEvmSigner(facilitatorViemClient);
-  const { client: facilitatorClient } = createInProcessFacilitator(new x402Facilitator(), fac =>
-    registerEscrowFacilitatorScheme(fac, {
-      signer: signer as Parameters<typeof registerEscrowFacilitatorScheme>[1]["signer"],
-      networks: NETWORK_ID,
-    }),
-  );
+    const signer = toFacilitatorEvmSigner(facilitatorViemClient);
+    const { client } = createInProcessFacilitator(new x402Facilitator(), fac =>
+      registerEscrowFacilitatorScheme(fac, {
+        signer: signer as Parameters<typeof registerEscrowFacilitatorScheme>[1]["signer"],
+        networks: NETWORK_ID,
+      }),
+    );
+    facilitatorClient = client;
+  }
 
-  const resourceServer = new x402ResourceServer(
-    facilitatorClient as Parameters<typeof x402ResourceServer.prototype.constructor>[0],
-  );
+  const resourceServer = new x402ResourceServer(facilitatorClient);
   registerEscrowServerScheme(resourceServer, { networks: NETWORK_ID });
   await resourceServer.initialize();
 
@@ -738,6 +748,7 @@ async function main() {
   console.log("  Payer address:   ", payerAccount.address);
   console.log("  Network:         ", `${CHAIN.name} (${NETWORK_ID})`);
   console.log("  Arbiter URL:     ", ARBITER_URL);
+  if (FACILITATOR_URL) console.log("  Facilitator URL: ", FACILITATOR_URL);
   console.log("  Dashboard:       ", "http://localhost:3001");
 
   console.log("\n  PaymentInfo JSON:");

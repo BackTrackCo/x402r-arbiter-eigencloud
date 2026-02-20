@@ -24,6 +24,7 @@ export default function VerifyPage() {
   const [nonce, setNonce] = useState("");
   const [originalCommitment, setOriginalCommitment] = useState<Commitment | null>(null);
   const [commitmentLoading, setCommitmentLoading] = useState(false);
+  const [paymentInfoResolved, setPaymentInfoResolved] = useState(false);
 
   const loadCommitment = useCallback(
     async (pi: Record<string, unknown>, n: string) => {
@@ -62,6 +63,7 @@ export default function VerifyPage() {
         if (cached) {
           loadCommitment(cached, d.nonce);
         }
+        setPaymentInfoResolved(true);
       })
       .catch(() => setLoading(false));
   }, [compositeKey, loadCommitment]);
@@ -103,7 +105,7 @@ export default function VerifyPage() {
       <Separator />
 
       {/* PaymentInfo Input — only show if auto-load didn't find cached paymentInfo */}
-      {!paymentInfo && !commitmentLoading && (
+      {!paymentInfo && !commitmentLoading && paymentInfoResolved && (
         <section>
           <h2 className="text-xs text-muted-foreground uppercase tracking-widest mb-3">
             PAYMENTINFO

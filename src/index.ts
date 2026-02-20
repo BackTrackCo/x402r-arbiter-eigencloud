@@ -338,7 +338,7 @@ app.post("/api/evaluate", async (req, res) => {
     const commitment = createCommitment(
       userPrompt,
       seed,
-      aiResult.rawResponse,
+      aiResult.displayContent,
     );
 
     // 5. Parse AI decision (model may include reasoning text before the JSON)

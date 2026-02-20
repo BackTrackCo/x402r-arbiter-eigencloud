@@ -334,7 +334,8 @@ app.post("/api/evaluate", async (req, res) => {
       seed,
     );
 
-    // 4. Create commitment hash
+    // 4. Create commitment hash (use displayContent — rawResponse contains
+    //    non-deterministic EigenAI channel/message tags that break replay)
     const commitment = createCommitment(
       userPrompt,
       seed,
@@ -538,11 +539,11 @@ app.post("/api/verify", async (req, res) => {
       seed,
     );
 
-    // Recompute commitment
+    // Recompute commitment (must use displayContent to match evaluate endpoint)
     const replayCommitment = createCommitment(
       userPrompt,
       seed,
-      aiResult.rawResponse,
+      aiResult.displayContent,
     );
 
     res.json({

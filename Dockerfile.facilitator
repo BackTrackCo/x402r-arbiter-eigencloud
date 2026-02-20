@@ -1,0 +1,27 @@
+FROM node:22-slim
+
+RUN npm install -g pnpm@latest
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+
+# Strip file: devDeps and pnpm patches (won't resolve outside monorepo)
+RUN node -e " \
+  const p = JSON.parse(require('fs').readFileSync('package.json','utf8')); \
+  const dev = p.devDependencies || {}; \
+  for (const k of Object.keys(dev)) { \
+    if (typeof dev[k] === 'string' && dev[k].startsWith('file:')) delete dev[k]; \
+  } \
+  delete p.pnpm; \
+  require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)); \
+"
+
+# Install all deps (devDeps have @x402/evm, @x402r/evm, etc.)
+RUN pnpm install
+
+COPY src/facilitator-server.ts src/
+
+EXPOSE 4022
+
+CMD ["npx", "tsx", "src/facilitator-server.ts"]

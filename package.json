@@ -14,6 +14,7 @@
     "seed": "tsx -r dotenv/config court-seed.ts",
     "merchant": "tsx src/merchant-server.ts",
     "merchant:bot": "tsx src/merchant-bot.ts",
+    "facilitator": "tsx src/facilitator-server.ts",
     "dashboard": "pnpm --filter court-ui dev",
     "dashboard:build": "pnpm --filter court-ui build"
   },

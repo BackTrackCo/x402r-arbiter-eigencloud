@@ -24,6 +24,7 @@ export default function DisputeDetailPage() {
 
   // Track the resolved paymentInfo so polling can reuse it
   const [paymentInfo, setPaymentInfo] = useState<Record<string, unknown> | null>(null);
+  const [paymentInfoResolved, setPaymentInfoResolved] = useState(false);
 
   const loadEvidence = useCallback(
     async (pi: Record<string, unknown>, nonce: string, background = false) => {
@@ -59,6 +60,7 @@ export default function DisputeDetailPage() {
         if (cached) {
           loadEvidence(cached, d.nonce);
         }
+        setPaymentInfoResolved(true);
       })
       .catch(() => setLoading(false));
   }, [compositeKey, loadEvidence]);
@@ -154,7 +156,7 @@ export default function DisputeDetailPage() {
       <Separator />
 
       {/* Evidence Loading — only show manual input if auto-load didn't find cached paymentInfo */}
-      {!evidence && !evidenceLoading && (
+      {!evidence && !evidenceLoading && paymentInfoResolved && (
         <section>
           <h2 className="text-xs text-muted-foreground uppercase tracking-widest mb-3">
             LOAD EVIDENCE

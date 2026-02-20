@@ -12,6 +12,8 @@
     "cli": "tsx cli/bin/x402r.ts",
     "cli:e2e": "tsx cli/e2e-test.ts",
     "seed": "tsx -r dotenv/config court-seed.ts",
+    "merchant": "tsx src/merchant-server.ts",
+    "merchant:bot": "tsx src/merchant-bot.ts",
     "dashboard": "pnpm --filter court-ui dev",
     "dashboard:build": "pnpm --filter court-ui build"
   },
@@ -31,6 +33,7 @@
     "@types/node": "^20.0.0",
     "@x402/core": "^2.3.0",
     "@x402/evm": "^2.3.0",
+    "@x402/express": "^2.3.0",
     "@x402r/client": "^0.0.2",
     "@x402r/evm": "^0.0.2",
     "@x402r/helpers": "^0.0.2",

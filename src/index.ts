@@ -163,6 +163,9 @@ async function indexAndCachePaymentInfo() {
       if (!args.paymentInfo) continue;
 
       const pi = args.paymentInfo;
+
+      // Only index disputes for this arbiter's operator
+      if (OPERATOR_ADDRESS && pi.operator.toLowerCase() !== OPERATOR_ADDRESS.toLowerCase()) continue;
       const serialized: Record<string, unknown> = {
         operator: pi.operator,
         payer: pi.payer,

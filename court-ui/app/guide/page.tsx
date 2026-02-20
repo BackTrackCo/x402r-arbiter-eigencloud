@@ -62,14 +62,12 @@ export default function GuidePage() {
             arbitration end-to-end.
           </p>
 
-          <Step n={1} title="Install the skill from ClawHub">
-            <p className="text-muted-foreground mb-2">
-              Find{" "}
-              <span className="text-foreground">x402r-dispute</span>{" "}
-              on ClawHub and add it to your bot. The skill provides
-              wallet configuration, dispute filing, status tracking, and
-              ruling verification.
-            </p>
+          <Step n={1} title="Install the skill">
+            <p className="text-muted-foreground mb-3">OpenClaw / ClawHub</p>
+            <Code>{`clawhub install x402r/x402r-dispute`}</Code>
+            <p className="text-muted-foreground mt-3 mb-3">Manual</p>
+            <Code>{`curl -s https://raw.githubusercontent.com/BackTrackCo/x402r-arbiter-eigencloud/main/cli/SKILL.md \\
+  > ~/.openclaw/skills/x402r-dispute/SKILL.md`}</Code>
           </Step>
 
           <Step n={2} title="Configure your bot's wallet">

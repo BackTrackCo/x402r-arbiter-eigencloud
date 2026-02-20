@@ -48,96 +48,96 @@ export default function GuidePage() {
 
       <Separator />
 
-      {/* OpenClaw Tutorial */}
+      {/* OpenClaw Bot Tutorial */}
       <section>
         <h2 className="text-xs text-muted-foreground uppercase tracking-widest mb-3">
           OPENCLAW BOT GUIDE
         </h2>
         <div className="border border-border p-4 space-y-6 text-xs">
           <p className="text-muted-foreground">
-            Use the <span className="text-foreground">x402r-dispute</span> OpenClaw
-            skill to act as a client — pay the merchant, file disputes, and
-            track arbitration.
+            The{" "}
+            <span className="text-foreground font-semibold">x402r-dispute</span>{" "}
+            skill is available on ClawHub. It lets an OpenClaw bot act as a
+            client — paying the merchant, filing disputes, and tracking
+            arbitration end-to-end.
           </p>
 
-          <Step n={1} title="Configure the CLI">
+          <Step n={1} title="Install the skill from ClawHub">
             <p className="text-muted-foreground mb-2">
-              Set up your wallet, operator, and arbiter server:
-            </p>
-            <Code>{`x402r config \\
-  --key <your-private-key> \\
-  --operator ${OPERATOR} \\
-  --arbiter-url <arbiter-server-url> \\
-  --network eip155:84532`}</Code>
-            <p className="text-muted-foreground mt-2">
-              Config is saved to <span className="text-foreground">~/.x402r/config.json</span>.
-              You only need to do this once.
+              Find{" "}
+              <span className="text-foreground">x402r-dispute</span>{" "}
+              on ClawHub and add it to your bot. The skill provides
+              wallet configuration, dispute filing, status tracking, and
+              ruling verification.
             </p>
           </Step>
 
-          <Step n={2} title="Make a payment">
+          <Step n={2} title="Configure your bot's wallet">
             <p className="text-muted-foreground mb-2">
-              Use <span className="text-foreground">@x402/fetch</span> to buy
-              from the merchant. The escrow scheme handles the 402 flow
-              automatically:
+              Tell your bot to set up the x402r config with these details:
             </p>
-            <Code>{`import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
-import { registerEscrowScheme } from "@x402r/evm/escrow/client";
-import { privateKeyToAccount } from "viem/accounts";
-
-const client = new x402Client();
-registerEscrowScheme(client, {
-  signer: privateKeyToAccount("0x..."),
-  networks: "eip155:84532",
-});
-
-const fetchWithPayment = wrapFetchWithPayment(fetch, client);
-const res = await fetchWithPayment("${MERCHANT_URL}/weather");
-console.log(await res.json());`}</Code>
+            <Code>{`Operator: ${OPERATOR}
+Network:  eip155:84532 (Base Sepolia)
+Merchant: ${MERCHANT_URL}/weather`}</Code>
             <p className="text-muted-foreground mt-2">
-              Save the payment response — you&apos;ll need the payment info
-              JSON for the dispute.
+              The bot needs a funded Base Sepolia wallet with testnet USDC
+              and ETH for gas. Config is persisted to{" "}
+              <span className="text-foreground">~/.x402r/config.json</span>.
             </p>
           </Step>
 
-          <Step n={3} title="File a dispute">
+          <Step n={3} title="Buy from the merchant">
             <p className="text-muted-foreground mb-2">
-              If the service was unsatisfactory, file a refund request.
-              The OpenClaw bot runs this via the x402r-dispute skill:
+              Ask your bot to fetch the weather endpoint. The x402 payment
+              flow is automatic — the bot sees the 402, signs an escrow
+              payment, and retries:
             </p>
-            <Code>{`x402r dispute "Weather data was inaccurate" \\
-  --evidence "Endpoint returned sunny but it was raining"`}</Code>
+            <Code>{`"Buy weather data from ${MERCHANT_URL}/weather"`}</Code>
             <p className="text-muted-foreground mt-2">
-              This creates an on-chain refund request and submits your
-              evidence in one step. State is saved for follow-up commands.
+              The payment goes into escrow. The bot receives the weather data
+              and saves the payment info for later.
             </p>
           </Step>
 
-          <Step n={4} title="Merchant auto-responds">
+          <Step n={4} title="File a dispute">
+            <p className="text-muted-foreground mb-2">
+              If the data was unsatisfactory, ask the bot to dispute:
+            </p>
+            <Code>{`"File a dispute — the weather data was inaccurate,
+it said sunny but it was raining"`}</Code>
+            <p className="text-muted-foreground mt-2">
+              The bot uses the skill to create an on-chain refund request
+              and submit evidence in one step.
+            </p>
+          </Step>
+
+          <Step n={5} title="Merchant auto-responds">
             <p className="text-muted-foreground mb-2">
               The merchant dispute bot detects the refund request on-chain
               and automatically submits counter-evidence. No action needed —
-              just wait a few seconds.
+              wait a few seconds.
             </p>
           </Step>
 
-          <Step n={5} title="Check status">
+          <Step n={6} title="Arbiter evaluates">
             <p className="text-muted-foreground mb-2">
-              Monitor the dispute resolution:
+              The arbiter collects evidence from both sides, evaluates with
+              a deterministic AI model, and submits its ruling on-chain.
+              Ask your bot to check the result:
             </p>
-            <Code>{`x402r status        # check ruling status
-x402r show          # view all evidence (payer + merchant + arbiter)
-x402r verify        # replay the AI evaluation to verify determinism`}</Code>
+            <Code>{`"Check my dispute status"
+"Show all evidence for my dispute"
+"Verify the arbiter's ruling was deterministic"`}</Code>
           </Step>
 
-          <Step n={6} title="View on dashboard">
+          <Step n={7} title="View on dashboard">
             <p className="text-muted-foreground mb-2">
               The dispute appears on the{" "}
               <a href="/" className="text-foreground underline underline-offset-2">
                 disputes page
               </a>{" "}
               where you can inspect evidence, the arbiter&apos;s ruling,
-              and verify the commitment hash.
+              commitment hash, and replay the AI evaluation.
             </p>
           </Step>
         </div>
@@ -151,14 +151,14 @@ x402r verify        # replay the AI evaluation to verify determinism`}</Code>
           END-TO-END FLOW
         </h2>
         <div className="border border-border p-4">
-          <pre className="text-xs text-muted-foreground leading-relaxed overflow-x-auto">{`Client (OpenClaw bot)          Merchant Server          Merchant Bot          Arbiter
+          <pre className="text-xs text-muted-foreground leading-relaxed overflow-x-auto">{`OpenClaw Bot                    Merchant Server          Merchant Bot          Arbiter
        |                            |                       |                    |
        |--- GET /weather ---------->|                       |                    |
        |<-- 402 (payment required) -|                       |                    |
        |--- GET /weather + payment->|                       |                    |
        |<-- 200 (weather data) -----|                       |                    |
        |                            |                       |                    |
-       |--- x402r dispute -------> [on-chain: RefundRequested]                   |
+       |--- dispute -------------> [on-chain: RefundRequested]                   |
        |                            |                       |                    |
        |                            |    (watches events)   |                    |
        |                            |<-- auto-evidence -----|                    |
@@ -166,7 +166,7 @@ x402r verify        # replay the AI evaluation to verify determinism`}</Code>
        |                            |              [arbiter evaluates both sides] |
        |                            |                       |<--- ruling --------|
        |                            |                       |                    |
-       |--- x402r status / verify ->|                       |                    |`}</pre>
+       |--- status / verify ------->|                       |                    |`}</pre>
         </div>
       </section>
     </div>

@@ -420,14 +420,21 @@ async function main() {
     process.exit(0);
   }
 
-  // Verify arbiter is reachable
+  // Verify arbiter is reachable and auto-detect operator if not set
   log(`Checking arbiter at ${ARBITER_URL}...`);
   try {
     const healthRes = await fetch(`${ARBITER_URL}/health`);
     if (!healthRes.ok) {
       throw new Error(`Health check returned ${healthRes.status}`);
     }
+    const healthData = await healthRes.json() as { operatorAddress?: string };
     log(`Arbiter is live at ${ARBITER_URL}`);
+
+    // Use the arbiter's operator if no OPERATOR_ADDRESS was explicitly set
+    if (!process.env.OPERATOR_ADDRESS && healthData.operatorAddress) {
+      operatorAddress = healthData.operatorAddress;
+      log(`Auto-detected operator from arbiter: ${operatorAddress}`);
+    }
   } catch (err) {
     console.error(`\nError: Arbiter not reachable at ${ARBITER_URL}`);
     console.error(`  ${err instanceof Error ? err.message : err}`);

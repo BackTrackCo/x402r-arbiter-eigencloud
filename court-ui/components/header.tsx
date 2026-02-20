@@ -23,9 +23,17 @@ export function Header() {
   return (
     <header className="border-b border-border">
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-        <Link href="/" className="text-base font-semibold tracking-tight">
-          x402r court
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link href="/" className="text-base font-semibold tracking-tight">
+            x402r court
+          </Link>
+          <Link
+            href="/guide"
+            className="text-xs text-muted-foreground uppercase tracking-widest hover:text-foreground transition-colors"
+          >
+            Guide
+          </Link>
+        </div>
         <span className="text-xs text-muted-foreground uppercase tracking-widest">
           {network}
         </span>

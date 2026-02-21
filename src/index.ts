@@ -642,6 +642,13 @@ async function start() {
             continue;
           }
 
+          // Skip if already resolved on-chain (status != 0/Pending)
+          const currentStatus = await arbiter.getRefundStatus(paymentInfo, nonce);
+          if (currentStatus !== 0) {
+            evaluatedDisputes.add(disputeKey);
+            continue;
+          }
+
           if (!hasPayerEvidence || !hasReceiverEvidence) continue;
 
           // Both parties have submitted — evaluate
@@ -657,8 +664,14 @@ async function start() {
               console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
             }
           } catch (err) {
-            console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, err);
-            evaluatedDisputes.delete(disputeKey);
+            const errMsg = String(err);
+            console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
+            // Only retry on transient errors; updateStatus reverts are permanent
+            if (errMsg.includes("updateStatus") || errMsg.includes("revert")) {
+              console.log(`[auto-eval] Permanent failure — marking ${disputeKey.slice(0, 20)}... as evaluated`);
+            } else {
+              evaluatedDisputes.delete(disputeKey);
+            }
           }
         }
       } catch (err) {

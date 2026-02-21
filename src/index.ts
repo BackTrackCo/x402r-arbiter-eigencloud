@@ -143,6 +143,7 @@ const evaluatedDisputes = new Set<string>();
 
 // --- Global ordered dispute keys (newest first, from on-chain events) ---
 let orderedDisputeKeys: Hex[] = [];
+const disputeIndexedAt = new Map<string, number>(); // compositeKey → epoch ms
 const MAX_BLOCK_RANGE = 50000n;
 
 // --- Indexed disputes for auto-evaluation (piHash-nonce → PaymentInfo+nonce) ---
@@ -210,6 +211,9 @@ async function indexAndCachePaymentInfo() {
 
       paymentInfoCache.set(hash, serialized);
       keys.push(compositeKey);
+      if (!disputeIndexedAt.has(compositeKey)) {
+        disputeIndexedAt.set(compositeKey, Date.now());
+      }
 
       // Store for auto-evaluation polling
       const disputeKey = `${hash}-${nonce}`;
@@ -489,6 +493,7 @@ app.get("/api/dispute/:compositeKey", async (req, res) => {
       nonce: data.nonce.toString(),
       amount: data.amount.toString(),
       status: data.status,
+      indexedAt: disputeIndexedAt.get(compositeKey) ?? null,
     });
   } catch (err) {
     console.error("Get dispute error:", err);

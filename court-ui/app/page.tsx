@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -28,9 +28,7 @@ export default function Dashboard() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  // Track when Pending disputes were first seen — hide after 5 min (stale/legacy)
   const STALE_PENDING_MS = 60 * 1000;
-  const pendingFirstSeen = useRef(new Map<string, number>());
 
   useEffect(() => {
     const poll = () =>
@@ -55,17 +53,12 @@ export default function Dashboard() {
         }),
       );
 
-      // Show resolved disputes always; show Pending only if first seen < 5 min ago
+      // Show resolved disputes always; show Pending only if indexed < 1 min ago
       const now = Date.now();
       const visible = details.filter((d) => {
-        if (d.status !== 0) {
-          pendingFirstSeen.current.delete(d.compositeKey);
-          return true;
-        }
-        if (!pendingFirstSeen.current.has(d.compositeKey)) {
-          pendingFirstSeen.current.set(d.compositeKey, now);
-        }
-        return now - pendingFirstSeen.current.get(d.compositeKey)! < STALE_PENDING_MS;
+        if (d.status !== 0) return true;
+        if (!d.indexedAt) return false; // no timestamp → old dispute
+        return now - d.indexedAt < STALE_PENDING_MS;
       });
 
       setTotal(visible.length);

@@ -6,16 +6,19 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml ./
 
-# Strip file: devDeps and pnpm patches (won't resolve outside monorepo)
+# Strip file: devDeps (won't resolve outside monorepo)
+# Keep pnpm.patchedDependencies so @x402/core patch is applied
 RUN node -e " \
   const p = JSON.parse(require('fs').readFileSync('package.json','utf8')); \
   const dev = p.devDependencies || {}; \
   for (const k of Object.keys(dev)) { \
     if (typeof dev[k] === 'string' && dev[k].startsWith('file:')) delete dev[k]; \
   } \
-  delete p.pnpm; \
   require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)); \
 "
+
+# Copy patches so pnpm can apply them during install
+COPY patches/ patches/
 
 # Install all deps (devDeps have @x402/evm, @x402r/evm, etc.)
 RUN pnpm install

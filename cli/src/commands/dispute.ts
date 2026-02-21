@@ -51,6 +51,9 @@ export function registerDisputeCommand(program: Command): void {
           const { txHash } = await client.requestRefund(paymentInfo, amount, nonce);
           refundTxHash = txHash;
           console.log("  Refund requested:", txHash);
+          console.log("  Waiting for confirmation...");
+          await (publicClient as any).waitForTransactionReceipt({ hash: txHash });
+          console.log("  Confirmed.");
         }
       } catch (error) {
         console.error("  Failed to request refund:", error instanceof Error ? error.message : error);

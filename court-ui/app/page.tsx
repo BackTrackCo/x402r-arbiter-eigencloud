@@ -15,6 +15,20 @@ import {
 } from "@/lib/api";
 
 const PAGE_SIZE = 10;
+const STALE_PENDING_MS = 60 * 1000;
+const LS_KEY = "x402r_pending_first_seen";
+
+function loadFirstSeen(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveFirstSeen(map: Record<string, number>) {
+  localStorage.setItem(LS_KEY, JSON.stringify(map));
+}
 
 interface DisputeWithKey extends DisputeDetail {
   compositeKey: string;
@@ -27,8 +41,6 @@ export default function Dashboard() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
-
-  const STALE_PENDING_MS = 60 * 1000;
 
   useEffect(() => {
     const poll = () =>
@@ -53,13 +65,20 @@ export default function Dashboard() {
         }),
       );
 
-      // Show resolved disputes always; show Pending only if indexed < 1 min ago
+      // Show resolved disputes always; show Pending only if first seen < 1 min ago
       const now = Date.now();
+      const firstSeen = loadFirstSeen();
       const visible = details.filter((d) => {
-        if (d.status !== 0) return true;
-        if (!d.indexedAt) return false; // no timestamp → old dispute
-        return now - d.indexedAt < STALE_PENDING_MS;
+        if (d.status !== 0) {
+          delete firstSeen[d.compositeKey];
+          return true;
+        }
+        if (!firstSeen[d.compositeKey]) {
+          firstSeen[d.compositeKey] = now;
+        }
+        return now - firstSeen[d.compositeKey] < STALE_PENDING_MS;
       });
+      saveFirstSeen(firstSeen);
 
       setTotal(visible.length);
       setDisputes(visible);

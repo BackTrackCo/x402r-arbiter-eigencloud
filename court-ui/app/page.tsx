@@ -29,7 +29,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   // Track when Pending disputes were first seen — hide after 5 min (stale/legacy)
-  const STALE_PENDING_MS = 5 * 60 * 1000;
+  const STALE_PENDING_MS = 60 * 1000;
   const pendingFirstSeen = useRef(new Map<string, number>());
 
   useEffect(() => {

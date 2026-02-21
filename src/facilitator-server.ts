@@ -57,7 +57,7 @@ if (!chain) {
   process.exit(1);
 }
 
-const networkId = `eip155:${CHAIN_ID}`;
+const networkId = `eip155:${CHAIN_ID}` as `${string}:${string}`;
 const account = privateKeyToAccount(PRIVATE_KEY);
 const transport = http(RPC_URL);
 

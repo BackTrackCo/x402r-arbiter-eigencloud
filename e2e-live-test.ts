@@ -69,7 +69,7 @@ const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
   "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0") as Address;
 const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:84532";
 const ARBITER_URL =
-  process.env.ARBITER_URL ?? "http://34.28.69.172:3000";
+  process.env.ARBITER_URL ?? "http://34.168.46.192:3000";
 const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
 const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
 

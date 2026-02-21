@@ -25,7 +25,6 @@ export interface DisputeDetail {
   nonce: string;
   amount: string;
   status: number;
-  indexedAt: number | null;
 }
 
 export interface Commitment {

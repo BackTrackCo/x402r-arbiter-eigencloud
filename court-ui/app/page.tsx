@@ -10,28 +10,34 @@ import {
   fetchHealth,
   fetchDisputes,
   fetchDispute,
+  fetchPaymentInfo,
   type HealthResponse,
   type DisputeDetail,
 } from "@/lib/api";
+import { getEvidenceBatch } from "@/lib/contracts";
 
 const PAGE_SIZE = 10;
-const STALE_PENDING_MS = 60 * 1000;
-const LS_KEY = "x402r_pending_first_seen";
-
-function loadFirstSeen(): Record<string, number> {
-  try {
-    return JSON.parse(localStorage.getItem(LS_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function saveFirstSeen(map: Record<string, number>) {
-  localStorage.setItem(LS_KEY, JSON.stringify(map));
-}
+const STALE_PENDING_S = 60; // seconds — hide pending disputes older than this
 
 interface DisputeWithKey extends DisputeDetail {
   compositeKey: string;
+}
+
+/** For a pending dispute, fetch the first evidence entry's on-chain timestamp.
+ *  Returns epoch seconds, or null if no evidence / paymentInfo unavailable. */
+async function getDisputeCreatedAt(
+  paymentInfoHash: string,
+  nonce: string,
+): Promise<number | null> {
+  try {
+    const pi = await fetchPaymentInfo(paymentInfoHash);
+    if (!pi) return null;
+    const { entries } = await getEvidenceBatch(pi, BigInt(nonce), 0n, 1n);
+    if (entries.length === 0) return null;
+    return Number(entries[0].timestamp);
+  } catch {
+    return null;
+  }
 }
 
 export default function Dashboard() {
@@ -65,20 +71,21 @@ export default function Dashboard() {
         }),
       );
 
-      // Show resolved disputes always; show Pending only if first seen < 1 min ago
-      const now = Date.now();
-      const firstSeen = loadFirstSeen();
-      const visible = details.filter((d) => {
+      // Resolved disputes always show. For pending ones, check on-chain age.
+      const nowS = Math.floor(Date.now() / 1000);
+      const visible: DisputeWithKey[] = [];
+
+      for (const d of details) {
         if (d.status !== 0) {
-          delete firstSeen[d.compositeKey];
-          return true;
+          visible.push(d);
+          continue;
         }
-        if (!firstSeen[d.compositeKey]) {
-          firstSeen[d.compositeKey] = now;
+        // Pending — check first evidence timestamp on-chain
+        const createdAt = await getDisputeCreatedAt(d.paymentInfoHash, d.nonce);
+        if (createdAt !== null && nowS - createdAt < STALE_PENDING_S) {
+          visible.push(d);
         }
-        return now - firstSeen[d.compositeKey] < STALE_PENDING_MS;
-      });
-      saveFirstSeen(firstSeen);
+      }
 
       setTotal(visible.length);
       setDisputes(visible);

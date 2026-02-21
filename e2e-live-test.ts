@@ -13,8 +13,8 @@
  *   Phase 4: Wait for auto-evaluation (merchant bot + arbiter)
  *
  * Prerequisites:
- *   - Base Sepolia ETH (~0.001 for gas)
- *   - Base Sepolia USDC (0.01 USDC = 10000 units)
+ *   - Ethereum Sepolia ETH (~0.001 for gas)
+ *   - Ethereum Sepolia USDC (0.01 USDC = 10000 units)
  *   - CLI packages available (pnpm install in x402r-arbiter-eigencloud)
  *
  * Usage:
@@ -33,7 +33,7 @@ import {
   erc20Abi,
   type Address,
 } from "viem";
-import { baseSepolia } from "viem/chains";
+import { sepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402Client } from "@x402/core/client";
 import { x402HTTPClient } from "@x402/core/http";
@@ -67,13 +67,13 @@ const MERCHANT_URL =
   "https://x402r-test-merchant-production.up.railway.app/weather";
 const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
   "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0") as Address;
-const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:84532";
+const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:11155111";
 const ARBITER_URL =
   process.env.ARBITER_URL ?? "http://34.168.46.192:3000";
-const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
-const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
+const RPC_URL = process.env.RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com";
+const USDC_ADDRESS = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as Address;
 
-const SCANNER = "https://sepolia.basescan.org";
+const SCANNER = "https://sepolia.etherscan.io";
 
 // How long to wait for merchant bot + arbiter auto-eval (ms)
 const AUTO_EVAL_TIMEOUT_MS = 120_000;
@@ -109,7 +109,12 @@ function runCli(args: string): string {
   try {
     return execSync(cmd, {
       cwd: __dirname,
-      env: process.env,
+      env: {
+        ...process.env,
+        NETWORK_ID,
+        ARBITER_URL,
+        RPC_URL,
+      },
       encoding: "utf-8",
       timeout: 120_000,
     });
@@ -149,12 +154,12 @@ async function main() {
 
   const account = privateKeyToAccount(PRIVATE_KEY);
   const publicClient = createPublicClient({
-    chain: baseSepolia,
+    chain: sepolia,
     transport: http(RPC_URL),
   });
   const walletClient = createWalletClient({
     account,
-    chain: baseSepolia,
+    chain: sepolia,
     transport: http(RPC_URL),
   });
 
@@ -238,9 +243,20 @@ async function main() {
 
   if (response200.status !== 200) {
     const errBody = await response200.text();
+    // Log all response headers for debugging
+    log("Response headers:");
+    response200.headers.forEach((value, key) => {
+      log(`  ${key}: ${value.slice(0, 300)}`);
+    });
+    log(`Response body: ${errBody.slice(0, 500)}`);
+    // Log what we sent
+    log("Request headers sent:");
+    for (const [k, v] of Object.entries(requestHeaders)) {
+      log(`  ${k}: ${String(v).slice(0, 100)}...`);
+    }
     trackFail(
       "Paid request returns 200",
-      `Got ${response200.status}: ${errBody.slice(0, 200)}`,
+      `Got ${response200.status}`,
     );
     console.error("Cannot continue without successful payment.");
     process.exit(1);
@@ -261,7 +277,7 @@ async function main() {
   );
   const addresses = resolveAddresses(NETWORK_ID);
   const paymentHash = computePaymentInfoHash(
-    84532,
+    11155111,
     addresses.escrowAddress as `0x${string}`,
     paymentInfo,
   );
@@ -319,7 +335,7 @@ async function main() {
   log("Configuring CLI...");
   try {
     const configOutput = runCli(
-      `config --key ${PRIVATE_KEY} --operator ${OPERATOR_ADDRESS} --network ${NETWORK_ID} --arbiter-url ${ARBITER_URL}`,
+      `config --key ${PRIVATE_KEY} --operator ${OPERATOR_ADDRESS} --network ${NETWORK_ID} --arbiter-url ${ARBITER_URL} --rpc ${RPC_URL}`,
     );
     log(configOutput.trim());
     trackPass("CLI config set");
@@ -416,7 +432,7 @@ async function main() {
     escrowAddress: addresses.escrowAddress,
     refundRequestAddress: addresses.refundRequestAddress,
     refundRequestEvidenceAddress: addresses.evidenceAddress,
-    chainId: 84532,
+    chainId: 11155111,
   });
 
   const startWait = Date.now();

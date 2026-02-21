@@ -140,12 +140,13 @@ const paymentInfoCache = new Map<string, Record<string, unknown>>();
 
 // --- Auto-evaluation tracking ---
 const evaluatedDisputes = new Set<string>();
-const EVAL_DEBOUNCE_MS = 10_000; // 10s debounce after evidence arrives
-const pendingEvals = new Map<string, ReturnType<typeof setTimeout>>();
 
 // --- Global ordered dispute keys (newest first, from on-chain events) ---
 let orderedDisputeKeys: Hex[] = [];
 const MAX_BLOCK_RANGE = 50000n;
+
+// --- Indexed disputes for auto-evaluation (piHash-nonce → PaymentInfo+nonce) ---
+const indexedDisputes = new Map<string, { paymentInfo: PaymentInfo; nonce: bigint }>();
 
 /** Index RefundRequested events to populate paymentInfo cache + ordered dispute keys */
 async function indexAndCachePaymentInfo() {
@@ -209,6 +210,12 @@ async function indexAndCachePaymentInfo() {
 
       paymentInfoCache.set(hash, serialized);
       keys.push(compositeKey);
+
+      // Store for auto-evaluation polling
+      const disputeKey = `${hash}-${nonce}`;
+      if (!indexedDisputes.has(disputeKey)) {
+        indexedDisputes.set(disputeKey, { paymentInfo, nonce });
+      }
     }
 
     // Events are in block order (oldest first) — reverse for newest first
@@ -607,172 +614,57 @@ async function start() {
     }
   });
 
-  // 5. Poll for evidence submissions and auto-evaluate
-  //    Uses direct eth_getLogs polling instead of watchContractEvent, which
-  //    can silently fail on some RPCs (no onError propagation in SDK wrapper).
+  // 5. Poll indexed disputes for evidence and auto-evaluate
+  //    Instead of decoding EvidenceSubmitted events (which had ABI issues),
+  //    periodically check each indexed dispute's evidence via getAllEvidence()
+  //    view calls. Simpler and guaranteed to work.
   if (OPERATOR_ADDRESS) {
-    const EVIDENCE_POLL_MS = 8_000;
-    let lastEvidenceBlock = await publicClient.getBlockNumber();
-    const seenEvidenceLogs = new Set<string>();
+    const AUTO_EVAL_POLL_MS = 15_000;
 
-    console.log(`  Starting evidence poller for auto-evaluation (every ${EVIDENCE_POLL_MS / 1000}s from block ${lastEvidenceBlock})...`);
-
-    const evidenceAbi = [
-      {
-        name: "EvidenceSubmitted",
-        type: "event" as const,
-        inputs: [
-          { name: "paymentInfo", type: "tuple" as const, indexed: false, components: [
-            { name: "operator", type: "address" as const },
-            { name: "payer", type: "address" as const },
-            { name: "receiver", type: "address" as const },
-            { name: "token", type: "address" as const },
-            { name: "maxAmount", type: "uint120" as const },
-            { name: "preApprovalExpiry", type: "uint48" as const },
-            { name: "authorizationExpiry", type: "uint48" as const },
-            { name: "refundExpiry", type: "uint48" as const },
-            { name: "minFeeBps", type: "uint16" as const },
-            { name: "maxFeeBps", type: "uint16" as const },
-            { name: "feeReceiver", type: "address" as const },
-            { name: "salt", type: "uint256" as const },
-          ]},
-          { name: "nonce", type: "uint256" as const, indexed: true },
-          { name: "submitter", type: "address" as const, indexed: true },
-          { name: "role", type: "uint8" as const, indexed: false },
-          { name: "cid", type: "string" as const, indexed: false },
-          { name: "index", type: "uint256" as const, indexed: false },
-        ],
-      },
-    ] as const;
+    console.log(`  Starting auto-evaluation poller (every ${AUTO_EVAL_POLL_MS / 1000}s)...`);
 
     setInterval(async () => {
       try {
-        const currentBlock = await publicClient.getBlockNumber();
-        if (currentBlock <= lastEvidenceBlock) return;
+        // Re-index to pick up new disputes
+        await indexAndCachePaymentInfo();
 
-        const logs = await publicClient.getContractEvents({
-          address: addresses.evidenceAddress as `0x${string}`,
-          abi: evidenceAbi,
-          eventName: "EvidenceSubmitted",
-          fromBlock: lastEvidenceBlock + 1n,
-          toBlock: currentBlock,
-        });
+        for (const [disputeKey, { paymentInfo, nonce }] of indexedDisputes) {
+          if (evaluatedDisputes.has(disputeKey)) continue;
 
-        lastEvidenceBlock = currentBlock;
+          const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonce);
+          const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
+          const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
+          const hasArbiterEvidence = allEvidence.some((e) => e.role === 2);
 
-        if (logs.length > 0) {
-          console.log(`[auto-eval] Found ${logs.length} evidence event(s) in blocks ${lastEvidenceBlock - (currentBlock - lastEvidenceBlock)}..${currentBlock}`);
-        }
-
-        for (const log of logs) {
-          const logKey = `${log.transactionHash}-${log.logIndex}`;
-          if (seenEvidenceLogs.has(logKey)) continue;
-          seenEvidenceLogs.add(logKey);
-
-          const args = log.args as any;
-          const pi = args.paymentInfo;
-          const nonce = args.nonce;
-          const role = args.role;
-
-          if (!pi || nonce === undefined || role === undefined) {
-            console.log(`[auto-eval] Skipping event with missing args: pi=${!!pi}, nonce=${nonce}, role=${role}`);
+          // Skip if arbiter already submitted (evaluated elsewhere, e.g. manual /api/evaluate)
+          if (hasArbiterEvidence) {
+            evaluatedDisputes.add(disputeKey);
             continue;
           }
 
-          // Skip arbiter's own evidence submissions (role 2)
-          if (role === 2) continue;
+          if (!hasPayerEvidence || !hasReceiverEvidence) continue;
 
-          // Only process disputes for this arbiter's operator
-          if (pi.operator.toLowerCase() !== OPERATOR_ADDRESS!.toLowerCase()) continue;
+          // Both parties have submitted — evaluate
+          console.log(`[auto-eval] Both parties submitted evidence for ${disputeKey.slice(0, 20)}... — evaluating`);
+          evaluatedDisputes.add(disputeKey);
 
-          const paymentInfo: PaymentInfo = {
-            operator: pi.operator,
-            payer: pi.payer,
-            receiver: pi.receiver,
-            token: pi.token,
-            maxAmount: pi.maxAmount,
-            preApprovalExpiry: pi.preApprovalExpiry,
-            authorizationExpiry: pi.authorizationExpiry,
-            refundExpiry: pi.refundExpiry,
-            minFeeBps: pi.minFeeBps,
-            maxFeeBps: pi.maxFeeBps,
-            feeReceiver: pi.feeReceiver,
-            salt: pi.salt,
-          };
-
-          const piHash = arbiter.computePaymentInfoHash(paymentInfo);
-          const nonceBI = BigInt(nonce);
-          const disputeKey = `${piHash}-${nonceBI}`;
-
-          // Skip already-evaluated disputes
-          if (evaluatedDisputes.has(disputeKey)) continue;
-
-          const roleName = role === 0 ? "Payer" : role === 1 ? "Receiver" : `Role(${role})`;
-          console.log(`[auto-eval] Evidence from ${roleName} for dispute ${disputeKey.slice(0, 20)}...`);
-
-          // Cache paymentInfo from the event
-          if (!paymentInfoCache.has(piHash)) {
-            paymentInfoCache.set(piHash, {
-              operator: pi.operator,
-              payer: pi.payer,
-              receiver: pi.receiver,
-              token: pi.token,
-              maxAmount: String(pi.maxAmount),
-              preApprovalExpiry: String(pi.preApprovalExpiry),
-              authorizationExpiry: String(pi.authorizationExpiry),
-              refundExpiry: String(pi.refundExpiry),
-              minFeeBps: Number(pi.minFeeBps),
-              maxFeeBps: Number(pi.maxFeeBps),
-              feeReceiver: pi.feeReceiver,
-              salt: String(pi.salt),
-            });
+          try {
+            const result = await evaluateDispute(paymentInfo, nonce);
+            console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
+            console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
+            console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
+            if (result.refundTx) {
+              console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
+            }
+          } catch (err) {
+            console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, err);
+            evaluatedDisputes.delete(disputeKey);
           }
-
-          // Debounce: reset timer each time new evidence arrives for this dispute
-          const existing = pendingEvals.get(disputeKey);
-          if (existing) clearTimeout(existing);
-
-          pendingEvals.set(
-            disputeKey,
-            setTimeout(async () => {
-              pendingEvals.delete(disputeKey);
-
-              // Re-check in case it was evaluated while debouncing
-              if (evaluatedDisputes.has(disputeKey)) return;
-
-              try {
-                // Check that evidence exists from both payer (role 0) and receiver (role 1)
-                const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
-                const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
-                const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
-
-                if (!hasPayerEvidence || !hasReceiverEvidence) {
-                  console.log(`[auto-eval] Waiting for both parties (payer: ${hasPayerEvidence}, receiver: ${hasReceiverEvidence})`);
-                  return;
-                }
-
-                console.log(`[auto-eval] Both parties submitted evidence — evaluating dispute ${disputeKey.slice(0, 20)}...`);
-                evaluatedDisputes.add(disputeKey);
-
-                const result = await evaluateDispute(paymentInfo, nonceBI);
-                console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
-                console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
-                console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
-                if (result.refundTx) {
-                  console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
-                }
-              } catch (err) {
-                console.error(`[auto-eval] Failed to evaluate dispute ${disputeKey.slice(0, 20)}...:`, err);
-                // Remove from evaluated so it can be retried
-                evaluatedDisputes.delete(disputeKey);
-              }
-            }, EVAL_DEBOUNCE_MS),
-          );
         }
       } catch (err) {
         console.error("[auto-eval] Poll error:", err);
       }
-    }, EVIDENCE_POLL_MS);
+    }, AUTO_EVAL_POLL_MS);
   }
 }
 

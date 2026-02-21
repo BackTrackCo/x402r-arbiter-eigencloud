@@ -138,6 +138,11 @@ const eigenai = new EigenAIClient(account, EIGENAI_GRANT_SERVER, EIGENAI_MODEL);
 // --- PaymentInfo cache (hash → serialized PaymentInfo) ---
 const paymentInfoCache = new Map<string, Record<string, unknown>>();
 
+// --- Auto-evaluation tracking ---
+const evaluatedDisputes = new Set<string>();
+const EVAL_DEBOUNCE_MS = 10_000; // 10s debounce after evidence arrives
+const pendingEvals = new Map<string, ReturnType<typeof setTimeout>>();
+
 // --- Global ordered dispute keys (newest first, from on-chain events) ---
 let orderedDisputeKeys: Hex[] = [];
 const MAX_BLOCK_RANGE = 50000n;
@@ -288,7 +293,133 @@ app.get("/api/payment-info/:hash", (req, res) => {
   res.json(data);
 });
 
-// --- Evaluate dispute ---
+// --- Evaluate dispute (reusable core logic) ---
+
+interface EvaluateResult {
+  decision: string;
+  reasoning: string;
+  confidence: number;
+  commitment: ReturnType<typeof createCommitment>;
+  evidenceSubmitTx: Hex;
+  decisionTx: Hex;
+  refundTx?: Hex;
+  refundError?: string;
+}
+
+async function evaluateDispute(
+  paymentInfo: PaymentInfo,
+  nonce: bigint,
+): Promise<EvaluateResult> {
+  // 1. Get all evidence
+  const evidence = await arbiter.getAllEvidence(paymentInfo, nonce);
+  if (evidence.length === 0) {
+    throw new Error("No evidence submitted for this dispute");
+  }
+
+  // 2. Resolve evidence content (inline JSON or IPFS fetch)
+  const evidenceContent = new Map<string, string>();
+  for (const entry of evidence) {
+    try {
+      const content = await resolveEvidenceContent(entry.cid);
+      evidenceContent.set(
+        entry.cid,
+        typeof content === "string" ? content : JSON.stringify(content),
+      );
+    } catch (err) {
+      console.warn(`Failed to resolve evidence ${entry.cid}:`, err);
+      evidenceContent.set(entry.cid, "(failed to retrieve)");
+    }
+  }
+
+  // 3. Build prompt & evaluate via EigenAI (random seed per dispute)
+  const seed = Math.floor(Math.random() * 10000);
+  const userPrompt = buildPrompt(evidence, evidenceContent);
+  const aiResult = await eigenai.evaluate(
+    SYSTEM_PROMPT,
+    userPrompt,
+    seed,
+  );
+
+  // 4. Create commitment hash (use displayContent — rawResponse contains
+  //    non-deterministic EigenAI channel/message tags that break replay)
+  const commitment = createCommitment(
+    userPrompt,
+    seed,
+    aiResult.displayContent,
+  );
+
+  // 5. Parse AI decision (model may include reasoning text before the JSON)
+  let decision: { decision: string; reasoning: string; confidence: number };
+  try {
+    decision = JSON.parse(aiResult.displayContent);
+  } catch {
+    // Try to extract JSON object from the response (model often prepends reasoning)
+    const jsonMatch = aiResult.displayContent.match(/\{[\s\S]*"decision"[\s\S]*"reasoning"[\s\S]*"confidence"[\s\S]*\}/);
+    if (jsonMatch) {
+      decision = JSON.parse(jsonMatch[0]);
+    } else {
+      throw new Error(`Failed to parse AI response: ${aiResult.displayContent}`);
+    }
+  }
+
+  // 6. Apply confidence threshold to determine on-chain outcome
+  const meetsThreshold =
+    decision.decision === "approve" &&
+    decision.confidence >= CONFIDENCE_THRESHOLD;
+  const outcome = meetsThreshold ? "approve" : "deny";
+
+  // 7. Submit arbiter evidence (commitment + decision)
+  const evidenceCid = JSON.stringify({
+    type: "arbiter-ruling",
+    decision: outcome,
+    reasoning: decision.reasoning,
+    confidence: decision.confidence,
+    commitment: {
+      commitmentHash: commitment.commitmentHash,
+      promptHash: commitment.promptHash,
+      responseHash: commitment.responseHash,
+      seed: commitment.seed,
+    },
+    model: EIGENAI_MODEL,
+  });
+  const submitTx = await arbiter.submitEvidence(
+    paymentInfo,
+    nonce,
+    evidenceCid,
+  );
+
+  // 8. Submit on-chain decision
+  let decisionTx: { txHash: Hex };
+  const result: EvaluateResult = {
+    decision: decision.decision,
+    reasoning: decision.reasoning,
+    confidence: decision.confidence,
+    commitment,
+    evidenceSubmitTx: submitTx.txHash,
+    decisionTx: "0x" as Hex, // placeholder, set below
+  };
+
+  if (meetsThreshold) {
+    decisionTx = await arbiter.approveRefundRequest(paymentInfo, nonce);
+    result.decisionTx = decisionTx.txHash;
+
+    // Execute refund in escrow if approved
+    try {
+      const refundTx = await arbiter.executeRefundInEscrow(paymentInfo);
+      result.refundTx = refundTx.txHash;
+    } catch (refundErr) {
+      console.warn("Refund execution failed (may already be settled):", refundErr);
+      result.refundError = String(refundErr);
+    }
+  } else {
+    decisionTx = await arbiter.denyRefundRequest(paymentInfo, nonce);
+    result.decisionTx = decisionTx.txHash;
+  }
+
+  return result;
+}
+
+// --- Evaluate dispute endpoint ---
 app.post("/api/evaluate", async (req, res) => {
   try {
     const { paymentInfo: paymentInfoRaw, nonce } = req.body;
@@ -306,140 +437,13 @@ app.post("/api/evaluate", async (req, res) => {
       paymentInfoCache.set(piHash, paymentInfoRaw);
     }
 
-    // 1. Get all evidence
-    const evidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
-    if (evidence.length === 0) {
-      res.status(400).json({ error: "No evidence submitted for this dispute" });
-      return;
-    }
+    const result = await evaluateDispute(paymentInfo, nonceBI);
 
-    // 2. Resolve evidence content (inline JSON or IPFS fetch)
-    const evidenceContent = new Map<string, string>();
-    for (const entry of evidence) {
-      try {
-        const content = await resolveEvidenceContent(entry.cid);
-        evidenceContent.set(
-          entry.cid,
-          typeof content === "string" ? content : JSON.stringify(content),
-        );
-      } catch (err) {
-        console.warn(`Failed to resolve evidence ${entry.cid}:`, err);
-        evidenceContent.set(entry.cid, "(failed to retrieve)");
-      }
-    }
+    // Mark as evaluated
+    const disputeKey = `${piHash}-${nonceBI}`;
+    evaluatedDisputes.add(disputeKey);
 
-    // 3. Build prompt & evaluate via EigenAI (random seed per dispute)
-    const seed = Math.floor(Math.random() * 10000);
-    const userPrompt = buildPrompt(evidence, evidenceContent);
-    const aiResult = await eigenai.evaluate(
-      SYSTEM_PROMPT,
-      userPrompt,
-      seed,
-    );
-
-    // 4. Create commitment hash (use displayContent — rawResponse contains
-    //    non-deterministic EigenAI channel/message tags that break replay)
-    const commitment = createCommitment(
-      userPrompt,
-      seed,
-      aiResult.displayContent,
-    );
-
-    // 5. Parse AI decision (model may include reasoning text before the JSON)
-    let decision: { decision: string; reasoning: string; confidence: number };
-    try {
-      decision = JSON.parse(aiResult.displayContent);
-    } catch {
-      // Try to extract JSON object from the response (model often prepends reasoning)
-      const jsonMatch = aiResult.displayContent.match(/\{[\s\S]*"decision"[\s\S]*"reasoning"[\s\S]*"confidence"[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          decision = JSON.parse(jsonMatch[0]);
-        } catch {
-          res.status(500).json({
-            error: "Failed to parse AI response",
-            rawResponse: aiResult.displayContent,
-          });
-          return;
-        }
-      } else {
-        res.status(500).json({
-          error: "Failed to parse AI response",
-          rawResponse: aiResult.displayContent,
-        });
-        return;
-      }
-    }
-
-    // 6. Apply confidence threshold to determine on-chain outcome
-    const meetsThreshold =
-      decision.decision === "approve" &&
-      decision.confidence >= CONFIDENCE_THRESHOLD;
-    const outcome = meetsThreshold ? "approve" : "deny";
-
-    // 7. Submit arbiter evidence (commitment + decision)
-    const evidenceCid = JSON.stringify({
-      type: "arbiter-ruling",
-      decision: outcome,
-      reasoning: decision.reasoning,
-      confidence: decision.confidence,
-      commitment: {
-        commitmentHash: commitment.commitmentHash,
-        promptHash: commitment.promptHash,
-        responseHash: commitment.responseHash,
-        seed: commitment.seed,
-      },
-      model: EIGENAI_MODEL,
-    });
-    const submitTx = await arbiter.submitEvidence(
-      paymentInfo,
-      nonceBI,
-      evidenceCid,
-    );
-
-    // 8. Submit on-chain decision
-    let decisionTx: { txHash: Hex };
-    if (meetsThreshold) {
-      decisionTx = await arbiter.approveRefundRequest(paymentInfo, nonceBI);
-
-      // 8. Execute refund in escrow if approved
-      try {
-        const refundTx = await arbiter.executeRefundInEscrow(paymentInfo);
-        res.json({
-          decision: decision.decision,
-          reasoning: decision.reasoning,
-          confidence: decision.confidence,
-          commitment,
-          evidenceSubmitTx: submitTx.txHash,
-          decisionTx: decisionTx.txHash,
-          refundTx: refundTx.txHash,
-        });
-        return;
-      } catch (refundErr) {
-        console.warn("Refund execution failed (may already be settled):", refundErr);
-        res.json({
-          decision: decision.decision,
-          reasoning: decision.reasoning,
-          confidence: decision.confidence,
-          commitment,
-          evidenceSubmitTx: submitTx.txHash,
-          decisionTx: decisionTx.txHash,
-          refundError: String(refundErr),
-        });
-        return;
-      }
-    } else {
-      decisionTx = await arbiter.denyRefundRequest(paymentInfo, nonceBI);
-    }
-
-    res.json({
-      decision: decision.decision,
-      reasoning: decision.reasoning,
-      confidence: decision.confidence,
-      commitment,
-      evidenceSubmitTx: submitTx.txHash,
-      decisionTx: decisionTx.txHash,
-    });
+    res.json(result);
   } catch (err) {
     console.error("Evaluate error:", err);
     res.status(500).json({ error: String(err) });
@@ -602,6 +606,102 @@ async function start() {
       }, INDEX_INTERVAL_MS);
     }
   });
+
+  // 5. Watch for evidence submissions and auto-evaluate
+  if (OPERATOR_ADDRESS) {
+    console.log("  Starting evidence watcher for auto-evaluation...");
+    arbiter.watchEvidenceSubmissions((event) => {
+      const { paymentInfo: pi, nonce, role } = event.args;
+      if (!pi || nonce === undefined || role === undefined) return;
+
+      // Skip arbiter's own evidence submissions (role 2)
+      if (role === 2) return;
+
+      const paymentInfo: PaymentInfo = {
+        operator: pi.operator,
+        payer: pi.payer,
+        receiver: pi.receiver,
+        token: pi.token,
+        maxAmount: pi.maxAmount,
+        preApprovalExpiry: pi.preApprovalExpiry,
+        authorizationExpiry: pi.authorizationExpiry,
+        refundExpiry: pi.refundExpiry,
+        minFeeBps: pi.minFeeBps,
+        maxFeeBps: pi.maxFeeBps,
+        feeReceiver: pi.feeReceiver,
+        salt: pi.salt,
+      };
+
+      const piHash = arbiter.computePaymentInfoHash(paymentInfo);
+      const nonceBI = BigInt(nonce);
+      const disputeKey = `${piHash}-${nonceBI}`;
+
+      // Skip already-evaluated disputes
+      if (evaluatedDisputes.has(disputeKey)) return;
+
+      const roleName = role === 0 ? "Payer" : "Receiver";
+      console.log(`[auto-eval] Evidence from ${roleName} for dispute ${disputeKey.slice(0, 20)}...`);
+
+      // Cache paymentInfo from the event
+      if (!paymentInfoCache.has(piHash)) {
+        paymentInfoCache.set(piHash, {
+          operator: pi.operator,
+          payer: pi.payer,
+          receiver: pi.receiver,
+          token: pi.token,
+          maxAmount: String(pi.maxAmount),
+          preApprovalExpiry: String(pi.preApprovalExpiry),
+          authorizationExpiry: String(pi.authorizationExpiry),
+          refundExpiry: String(pi.refundExpiry),
+          minFeeBps: Number(pi.minFeeBps),
+          maxFeeBps: Number(pi.maxFeeBps),
+          feeReceiver: pi.feeReceiver,
+          salt: String(pi.salt),
+        });
+      }
+
+      // Debounce: reset timer each time new evidence arrives for this dispute
+      const existing = pendingEvals.get(disputeKey);
+      if (existing) clearTimeout(existing);
+
+      pendingEvals.set(
+        disputeKey,
+        setTimeout(async () => {
+          pendingEvals.delete(disputeKey);
+
+          // Re-check in case it was evaluated while debouncing
+          if (evaluatedDisputes.has(disputeKey)) return;
+
+          try {
+            // Check that evidence exists from both payer (role 0) and receiver (role 1)
+            const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
+            const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
+            const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
+
+            if (!hasPayerEvidence || !hasReceiverEvidence) {
+              console.log(`[auto-eval] Waiting for both parties (payer: ${hasPayerEvidence}, receiver: ${hasReceiverEvidence})`);
+              return;
+            }
+
+            console.log(`[auto-eval] Both parties submitted evidence — evaluating dispute ${disputeKey.slice(0, 20)}...`);
+            evaluatedDisputes.add(disputeKey);
+
+            const result = await evaluateDispute(paymentInfo, nonceBI);
+            console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
+            console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
+            console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
+            if (result.refundTx) {
+              console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
+            }
+          } catch (err) {
+            console.error(`[auto-eval] Failed to evaluate dispute ${disputeKey.slice(0, 20)}...:`, err);
+            // Remove from evaluated so it can be retried
+            evaluatedDisputes.delete(disputeKey);
+          }
+        }, EVAL_DEBOUNCE_MS),
+      );
+    });
+  }
 }
 
 start();

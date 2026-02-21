@@ -11,6 +11,7 @@
     "verify": "tsx src/verify-eigenai.ts",
     "cli": "tsx cli/bin/x402r.ts",
     "cli:e2e": "tsx cli/e2e-test.ts",
+    "e2e:live": "tsx e2e-live-test.ts",
     "seed": "tsx -r dotenv/config court-seed.ts",
     "merchant": "tsx src/merchant-server.ts",
     "merchant:bot": "tsx src/merchant-bot.ts",

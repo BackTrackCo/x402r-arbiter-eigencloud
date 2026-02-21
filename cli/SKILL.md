@@ -31,12 +31,12 @@ npm install -g @x402r/cli
 Before using any commands, configure the CLI with the user's wallet and operator:
 
 ```bash
-npx --yes @x402r/cli config --key <private-key> --operator <operator-address> --arbiter-url <arbiter-server-url>
+npx --yes @x402r/cli config --key <private-key> --operator <operator-address> --arbiter-url https://x402r-arbiter-eigencloud.vercel.app/arbiter
 ```
 
 - `--key`: The user's Ethereum private key (0x-prefixed). Stored in `~/.x402r/config.json`.
 - `--operator`: The PaymentOperator contract address for the marketplace.
-- `--arbiter-url`: URL of the arbiter server (e.g., `https://arbiter.example.com`). Defaults to `http://localhost:3000`.
+- `--arbiter-url`: URL of the arbiter server. The public arbiter is at `https://x402r-arbiter-eigencloud.vercel.app/arbiter`.
 - `--network`: Network ID in EIP-155 format (default: `eip155:84532` for Base Sepolia).
 - `--rpc`: Custom RPC URL (optional).
 

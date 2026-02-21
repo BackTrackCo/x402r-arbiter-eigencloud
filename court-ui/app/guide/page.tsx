@@ -4,6 +4,7 @@ import { Separator } from "@/components/ui/separator";
 
 const MERCHANT_URL = "https://x402r-test-merchant-production.up.railway.app";
 const OPERATOR = "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0";
+const ARBITER_URL = "http://34.27.80.151:3000";
 
 export default function GuidePage() {
   return (
@@ -18,7 +19,8 @@ export default function GuidePage() {
             <Field label="ENDPOINT" value={`${MERCHANT_URL}/weather`} mono />
             <Field label="PRICE" value="$0.01 USDC (escrow)" />
             <Field label="OPERATOR" value={OPERATOR} mono />
-            <Field label="NETWORK" value="Base Sepolia (eip155:84532)" />
+            <Field label="ARBITER" value={ARBITER_URL} mono />
+            <Field label="NETWORK" value="Eth Sepolia (eip155:11155111)" />
           </div>
           <p className="text-xs text-muted-foreground">
             Returns weather data behind an x402r escrow paywall.
@@ -75,7 +77,8 @@ export default function GuidePage() {
               Tell your bot to set up the x402r config with these details:
             </p>
             <Code>{`Operator: ${OPERATOR}
-Network:  eip155:84532 (Base Sepolia)
+Network:  eip155:11155111 (Eth Sepolia)
+Arbiter:  ${ARBITER_URL}
 Merchant: ${MERCHANT_URL}/weather`}</Code>
             <p className="text-muted-foreground mt-2">
               The bot needs a funded Base Sepolia wallet with testnet USDC

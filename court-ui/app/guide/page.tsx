@@ -4,7 +4,7 @@ import { Separator } from "@/components/ui/separator";
 
 const MERCHANT_URL = "https://x402r-test-merchant-production.up.railway.app";
 const OPERATOR = "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0";
-const ARBITER_URL = "http://34.27.80.151:3000";
+const ARBITER_URL = "https://x402r-arbiter-eigencloud.vercel.app/arbiter";
 
 export default function GuidePage() {
   return (

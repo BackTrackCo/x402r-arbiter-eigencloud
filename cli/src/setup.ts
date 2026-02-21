@@ -11,7 +11,7 @@ import {
   type WalletClient,
   type Chain,
 } from "viem";
-import { baseSepolia, base } from "viem/chains";
+import { baseSepolia, base, sepolia } from "viem/chains";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { resolveAddresses, type ResolvedAddresses } from "@x402r/core";
 import { getConfig } from "./config.js";
@@ -19,6 +19,7 @@ import { getConfig } from "./config.js";
 const CHAINS: Record<number, Chain> = {
   84532: baseSepolia,
   8453: base,
+  11155111: sepolia,
 };
 
 export interface CliSetup {

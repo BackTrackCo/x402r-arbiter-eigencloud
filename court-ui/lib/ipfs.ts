@@ -5,7 +5,7 @@ const PINATA_GATEWAY = "https://gateway.pinata.cloud/ipfs";
  * CIDv0: starts with "Qm", exactly 46 base58 chars (no underscores/special chars).
  * CIDv1: starts with "bafy".
  */
-function isIpfsCid(s: string): boolean {
+export function isIpfsCid(s: string): boolean {
   if (s.startsWith("bafy")) return true;
   if (s.startsWith("Qm") && s.length === 46 && /^[A-Za-z0-9]+$/.test(s))
     return true;

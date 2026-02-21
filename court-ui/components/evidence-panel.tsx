@@ -3,14 +3,107 @@
 import { useState } from "react";
 import { Separator } from "@/components/ui/separator";
 import { truncateAddress, roleLabel } from "@/lib/utils";
-import { fetchEvidenceContent, tryParseJson } from "@/lib/ipfs";
+import { fetchEvidenceContent, tryParseJson, isIpfsCid } from "@/lib/ipfs";
 import type { EvidenceEntry } from "@/lib/contracts";
 
 interface EvidencePanelProps {
   entries: EvidenceEntry[];
 }
 
-function EvidenceRow({ entry, index }: { entry: EvidenceEntry; index: number }) {
+function JsonBlock({ data }: { data: Record<string, unknown> }) {
+  return (
+    <div className="space-y-1 text-xs">
+      {Object.entries(data).map(([key, value]) => (
+        <div key={key} className="flex gap-2">
+          <span className="text-muted-foreground shrink-0 uppercase tracking-wider">
+            {key}:
+          </span>
+          <span className="break-all">
+            {typeof value === "object" && value !== null
+              ? JSON.stringify(value, null, 2)
+              : String(value)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ArbiterContent({ data }: { data: Record<string, unknown> }) {
+  return (
+    <div className="space-y-2 text-xs">
+      {"decision" in data ? (
+        <div>
+          <span className="text-muted-foreground uppercase tracking-wider">
+            DECISION:{" "}
+          </span>
+          <span className="font-medium">
+            {String(data.decision).toUpperCase()}
+          </span>
+        </div>
+      ) : null}
+      {"confidence" in data ? (
+        <div>
+          <span className="text-muted-foreground uppercase tracking-wider">
+            CONFIDENCE:{" "}
+          </span>
+          <span>{String(data.confidence)}</span>
+        </div>
+      ) : null}
+      {"model" in data ? (
+        <div>
+          <span className="text-muted-foreground uppercase tracking-wider">
+            MODEL:{" "}
+          </span>
+          <span>{String(data.model)}</span>
+        </div>
+      ) : null}
+      {"commitment" in data &&
+        data.commitment &&
+        typeof data.commitment === "object" ? (
+          <>
+            <Separator />
+            <div className="space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wider">
+                COMMITMENT
+              </p>
+              {Object.entries(
+                data.commitment as Record<string, unknown>,
+              ).map(([key, value]) => (
+                <div key={key} className="flex gap-2">
+                  <span className="text-muted-foreground shrink-0">
+                    {key}:
+                  </span>
+                  <span className="break-all">{String(value)}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+      {"reasoning" in data && data.reasoning ? (
+        <>
+          <Separator />
+          <div>
+            <p className="text-muted-foreground uppercase tracking-wider mb-1">
+              REASONING
+            </p>
+            <p className="whitespace-pre-wrap text-muted-foreground/80">
+              {String(data.reasoning)}
+            </p>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function EvidenceRow({
+  entry,
+  index,
+}: {
+  entry: EvidenceEntry;
+  index: number;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -27,7 +120,9 @@ function EvidenceRow({ entry, index }: { entry: EvidenceEntry; index: number }) 
       const text = await fetchEvidenceContent(entry.cid);
       setContent(text);
     } catch (err) {
-      setContent(`Error: ${err instanceof Error ? err.message : "Failed to fetch"}`);
+      setContent(
+        `Error: ${err instanceof Error ? err.message : "Failed to fetch"}`,
+      );
     } finally {
       setLoading(false);
     }
@@ -38,7 +133,7 @@ function EvidenceRow({ entry, index }: { entry: EvidenceEntry; index: number }) 
   const timestamp = new Date(Number(entry.timestamp) * 1000).toISOString();
 
   const parsed = content ? tryParseJson(content) : null;
-  const commitment = isArbiter && parsed && typeof parsed === "object" ? parsed : null;
+  const isCid = isIpfsCid(entry.cid);
 
   return (
     <div className="border border-border">
@@ -55,84 +150,32 @@ function EvidenceRow({ entry, index }: { entry: EvidenceEntry; index: number }) 
             {truncateAddress(entry.submitter as string)}
           </span>
           <span className="text-muted-foreground">{timestamp}</span>
-          <span className="text-muted-foreground">{expanded ? "−" : "+"}</span>
+          <span className="text-muted-foreground">
+            {expanded ? "\u2212" : "+"}
+          </span>
         </div>
       </button>
       {expanded && (
         <div className="border-t border-border p-3">
           {loading ? (
-            <p className="text-xs text-muted-foreground">Fetching from IPFS...</p>
-          ) : commitment ? (
-            <div className="space-y-2 text-xs">
-              {"decision" in commitment ? (
-                <div>
-                  <span className="text-muted-foreground uppercase tracking-wider">
-                    DECISION:{" "}
-                  </span>
-                  <span className="font-medium">
-                    {String(commitment.decision).toUpperCase()}
-                  </span>
-                </div>
-              ) : null}
-              {"confidence" in commitment ? (
-                <div>
-                  <span className="text-muted-foreground uppercase tracking-wider">
-                    CONFIDENCE:{" "}
-                  </span>
-                  <span>{String(commitment.confidence)}</span>
-                </div>
-              ) : null}
-              {"model" in commitment ? (
-                <div>
-                  <span className="text-muted-foreground uppercase tracking-wider">
-                    MODEL:{" "}
-                  </span>
-                  <span>{String(commitment.model)}</span>
-                </div>
-              ) : null}
-              {"commitment" in commitment && commitment.commitment && typeof commitment.commitment === "object" ? (
-                <>
-                  <Separator />
-                  <div className="space-y-1">
-                    <p className="text-muted-foreground uppercase tracking-wider">
-                      COMMITMENT
-                    </p>
-                    {Object.entries(commitment.commitment as Record<string, unknown>).map(
-                      ([key, value]) => (
-                        <div key={key} className="flex gap-2">
-                          <span className="text-muted-foreground shrink-0">
-                            {key}:
-                          </span>
-                          <span className="break-all">{String(value)}</span>
-                        </div>
-                      ),
-                    )}
-                  </div>
-                </>
-              ) : null}
-              {"reasoning" in commitment && commitment.reasoning ? (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-muted-foreground uppercase tracking-wider mb-1">
-                      REASONING
-                    </p>
-                    <p className="whitespace-pre-wrap text-muted-foreground/80">
-                      {String(commitment.reasoning)}
-                    </p>
-                  </div>
-                </>
-              ) : null}
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Fetching from IPFS...
+            </p>
+          ) : isArbiter && parsed ? (
+            <ArbiterContent data={parsed} />
+          ) : parsed ? (
+            <JsonBlock data={parsed} />
           ) : (
             <div className="text-xs">
-              <p className="text-muted-foreground uppercase tracking-wider mb-1">
-                CID: {entry.cid}
-              </p>
+              {isCid && (
+                <p className="text-muted-foreground uppercase tracking-wider mb-1 break-all">
+                  CID: {entry.cid}
+                </p>
+              )}
               {content && (
-                <pre className="whitespace-pre-wrap text-muted-foreground/80 mt-2 max-h-64 overflow-y-auto">
+                <p className="whitespace-pre-wrap break-all text-muted-foreground/80">
                   {content}
-                </pre>
+                </p>
               )}
             </div>
           )}
@@ -145,7 +188,9 @@ function EvidenceRow({ entry, index }: { entry: EvidenceEntry; index: number }) 
 export function EvidencePanel({ entries }: EvidencePanelProps) {
   if (entries.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">No evidence submitted yet.</p>
+      <p className="text-xs text-muted-foreground">
+        No evidence submitted yet.
+      </p>
     );
   }
 

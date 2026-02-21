@@ -37,8 +37,26 @@ npx --yes @x402r/cli config --key <private-key> --operator <operator-address> --
 - `--key`: The user's Ethereum private key (0x-prefixed). Stored in `~/.x402r/config.json`.
 - `--operator`: The PaymentOperator contract address for the marketplace.
 - `--arbiter-url`: URL of the arbiter server. The public arbiter is at `https://x402r-arbiter-eigencloud.vercel.app/arbiter`.
-- `--network`: Network ID in EIP-155 format (default: `eip155:84532` for Base Sepolia).
-- `--rpc`: Custom RPC URL (optional).
+- `--network`: Network ID in EIP-155 format (default: `eip155:84532` for Base Sepolia). The test merchant at `https://x402r-test-merchant-production.up.railway.app` uses `eip155:11155111` (Ethereum Sepolia).
+- `--rpc`: Custom RPC URL (optional). For Ethereum Sepolia use `https://ethereum-sepolia-rpc.publicnode.com`.
+
+### Test Merchant Quick Start
+
+To test against the live merchant on Ethereum Sepolia:
+
+```bash
+npx --yes @x402r/cli config --key <private-key> --operator 0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0 --arbiter-url https://x402r-arbiter-eigencloud.vercel.app/arbiter --network eip155:11155111 --rpc https://ethereum-sepolia-rpc.publicnode.com
+```
+
+The test merchant endpoint is `https://x402r-test-merchant-production.up.railway.app/weather`. You can verify it returns a 402:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" https://x402r-test-merchant-production.up.railway.app/weather
+```
+
+Your wallet needs Ethereum Sepolia ETH and USDC:
+- ETH faucet: https://www.alchemy.com/faucets/ethereum-sepolia
+- USDC faucet: https://faucet.circle.com/ (select Ethereum Sepolia)
 
 To view current config:
 

@@ -22,7 +22,7 @@
  *   OPERATOR_ADDRESS — Optional. Skip deployment if already deployed.
  *   ARBITER_URL      — Optional. Arbiter server URL for evaluation trigger.
  *   MNEMONIC         — Optional. Override auto-generated mnemonic.
- *   NETWORK_ID       — Optional. Default: eip155:84532 (Base Sepolia).
+ *   NETWORK_ID       — Optional. Default: eip155:8453 (Base Mainnet).
  *   RPC_URL          — Optional. Override default RPC.
  *   FACILITATOR_URL  — Optional. Remote facilitator (e.g. https://facilitator.ultravioletadao.xyz).
  *   PINATA_JWT       — Optional. Pin evidence to IPFS (falls back to inline JSON).
@@ -42,7 +42,7 @@ import {
   type Address,
   type PublicClient,
 } from "viem";
-import { baseSepolia, sepolia } from "viem/chains";
+import { base, baseSepolia, sepolia } from "viem/chains";
 import type { Chain } from "viem";
 import { mnemonicToAccount, privateKeyToAccount, generateMnemonic } from "viem/accounts";
 import { english } from "viem/accounts";
@@ -78,16 +78,22 @@ import { savePaymentState } from "./cli/src/state.js";
 
 // ============ Config Constants ============
 
-const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:84532";
+const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:8453";
 const PAYMENT_AMOUNT = 10000n; // 0.01 USDC (6 decimals)
 
 const GAS_FUNDING_BY_NETWORK: Record<string, bigint> = {
+  "eip155:8453": 10000000000000n, // 0.00001 ETH (Base Mainnet — L2)
   "eip155:84532": 10000000000000n, // 0.00001 ETH (Base Sepolia — L2)
   "eip155:11155111": 10000000000000000n, // 0.01 ETH (Ethereum Sepolia — L1)
 };
 const GAS_FUNDING = GAS_FUNDING_BY_NETWORK[NETWORK_ID] ?? 10000000000000000n;
 
 const CHAIN_CONFIGS: Record<string, { chain: Chain; usdc: Address; scanner: string }> = {
+  "eip155:8453": {
+    chain: base,
+    usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address,
+    scanner: "https://basescan.org",
+  },
   "eip155:84532": {
     chain: baseSepolia,
     usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address,
@@ -109,7 +115,7 @@ if (!chainConfig) {
 }
 
 const CHAIN = chainConfig.chain;
-const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
+const RPC_URL = process.env.RPC_URL;
 const USDC_ADDRESS = chainConfig.usdc;
 const ARBITER_URL = process.env.ARBITER_URL; // e.g. http://localhost:3000 or EigenCloud URL
 const FACILITATOR_URL = process.env.FACILITATOR_URL; // e.g. https://facilitator.ultravioletadao.xyz

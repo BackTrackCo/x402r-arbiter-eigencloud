@@ -63,8 +63,8 @@ export function getConfig(): Required<Pick<CliConfigFile, "networkId" | "arbiter
     privateKey: process.env.PRIVATE_KEY || file.privateKey,
     operatorAddress: process.env.OPERATOR_ADDRESS || file.operatorAddress,
     arbiterUrl: process.env.ARBITER_URL || file.arbiterUrl || "http://localhost:3000",
-    networkId: process.env.NETWORK_ID || file.networkId || "eip155:84532",
-    rpcUrl: process.env.RPC_URL || file.rpcUrl || "https://sepolia.base.org",
+    networkId: process.env.NETWORK_ID || file.networkId || "eip155:8453",
+    rpcUrl: process.env.RPC_URL || file.rpcUrl,
     pinataApiKey: process.env.PINATA_API_KEY || file.pinataApiKey,
     pinataSecretKey: process.env.PINATA_SECRET_KEY || file.pinataSecretKey,
   };
@@ -80,7 +80,7 @@ export function printConfig(): void {
   console.log("  Operator:", config.operatorAddress || "(not set)");
   console.log("  Arbiter URL:", config.arbiterUrl);
   console.log("  Network:", config.networkId);
-  console.log("  RPC URL:", config.rpcUrl);
+  console.log("  RPC URL:", config.rpcUrl || "(chain default)");
   console.log("  Pinata API Key:", config.pinataApiKey ? `${config.pinataApiKey.slice(0, 8)}...` : "(not set)");
   console.log(`\n  Config file: ${CONFIG_FILE}`);
 }

@@ -138,7 +138,7 @@ function runCli(args: string): string {
         ...process.env,
         NETWORK_ID,
         ARBITER_URL,
-        RPC_URL,
+        ...(RPC_URL ? { RPC_URL } : {}),
       },
       encoding: "utf-8",
       timeout: 120_000,
@@ -360,7 +360,7 @@ async function main() {
   log("Configuring CLI...");
   try {
     const configOutput = runCli(
-      `config --key ${PRIVATE_KEY} --operator ${OPERATOR_ADDRESS} --network ${NETWORK_ID} --arbiter-url ${ARBITER_URL} --rpc ${RPC_URL}`,
+      `config --key ${PRIVATE_KEY} --operator ${OPERATOR_ADDRESS} --network ${NETWORK_ID} --arbiter-url ${ARBITER_URL}${RPC_URL ? ` --rpc ${RPC_URL}` : ""}`,
     );
     log(configOutput.trim());
     trackPass("CLI config set");

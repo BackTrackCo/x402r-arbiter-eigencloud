@@ -93,7 +93,7 @@ const SCANNER = SCANNERS[CHAIN_ID]!;
 
 const MERCHANT_URL =
   process.env.MERCHANT_URL ??
-  "https://x402r-test-merchant-production.up.railway.app/weather";
+  "https://fantastic-optimism-production-602a.up.railway.app/weather";
 const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
   "0xF5C1712736D3B8f34F245430edF9dF0aAd00D5B0") as Address;
 const ARBITER_URL =

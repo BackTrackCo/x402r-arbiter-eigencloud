@@ -19,7 +19,7 @@ export function registerDisputeCommand(program: Command): void {
     .option("-n, --nonce <nonce>", "Nonce (default: 0)", "0")
     .option("-a, --amount <amount>", "Refund amount (default: full payment amount)")
     .action(async (reason: string, options) => {
-      const { publicClient, walletClient, addresses, operatorAddress } = initCli();
+      const { publicClient, walletClient, addresses, operatorAddress } = await initCli();
       const paymentInfo = getPaymentInfo(options);
       const nonce = BigInt(options.nonce);
       const amount = options.amount ? BigInt(options.amount) : paymentInfo.maxAmount;
@@ -53,6 +53,8 @@ export function registerDisputeCommand(program: Command): void {
           console.log("  Refund requested:", txHash);
           console.log("  Waiting for confirmation...");
           await (publicClient as any).waitForTransactionReceipt({ hash: txHash });
+          // Brief delay to ensure state propagation on testnet RPCs
+          await new Promise(resolve => setTimeout(resolve, 3000));
           console.log("  Confirmed.");
         }
       } catch (error) {
@@ -94,13 +96,24 @@ export function registerDisputeCommand(program: Command): void {
         process.exit(1);
       }
 
-      // Step 3: Submit evidence on-chain
+      // Step 3: Submit evidence on-chain (skip if payer already submitted)
       console.log("\n[3/3] Submitting evidence on-chain...");
       let evidenceTxHash: string | undefined;
       try {
-        const { txHash } = await client.submitEvidence(paymentInfo, nonce, cid);
-        evidenceTxHash = txHash;
-        console.log("  Evidence submitted:", txHash);
+        const existing = await client.getAllEvidence(paymentInfo, nonce);
+        const alreadySubmitted = existing.some(
+          (e) => e.submitter.toLowerCase() === paymentInfo.payer.toLowerCase()
+        );
+        if (alreadySubmitted) {
+          console.log("  Evidence already submitted for this dispute — skipping");
+        } else {
+          const { txHash } = await client.submitEvidence(paymentInfo, nonce, cid);
+          evidenceTxHash = txHash;
+          console.log("  Evidence submitted:", txHash);
+          console.log("  Waiting for confirmation...");
+          await (publicClient as any).waitForTransactionReceipt({ hash: txHash });
+          console.log("  Confirmed.");
+        }
       } catch (error) {
         console.error("  Failed to submit evidence:", error instanceof Error ? error.message : error);
         process.exit(1);

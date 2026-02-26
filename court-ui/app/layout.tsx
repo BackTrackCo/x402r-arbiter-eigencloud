@@ -11,8 +11,8 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "x402r Court",
-  description: "Dispute resolution dashboard for x402r refundable payments",
+  title: "MoltArbiter",
+  description: "AI-powered dispute resolution for refundable payments",
 };
 
 export default function RootLayout({

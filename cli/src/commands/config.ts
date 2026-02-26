@@ -14,9 +14,8 @@ export function registerConfigCommand(program: Command): void {
     .option("-a, --arbiter-url <url>", "Set arbiter server URL")
     .option("-n, --network <networkId>", "Set network ID (e.g., eip155:84532)")
     .option("-r, --rpc <url>", "Set RPC URL")
-    .option("--pinata-key <key>", "Set Pinata API key")
-    .option("--pinata-secret <secret>", "Set Pinata secret key")
-    .action((options) => {
+    .option("--pinata-jwt <jwt>", "Set Pinata JWT token")
+    .action(async (options) => {
       const updates: CliConfigFile = {};
       let hasUpdates = false;
 
@@ -40,12 +39,8 @@ export function registerConfigCommand(program: Command): void {
         updates.rpcUrl = options.rpc;
         hasUpdates = true;
       }
-      if (options.pinataKey) {
-        updates.pinataApiKey = options.pinataKey;
-        hasUpdates = true;
-      }
-      if (options.pinataSecret) {
-        updates.pinataSecretKey = options.pinataSecret;
+      if (options.pinataJwt) {
+        updates.pinataJwt = options.pinataJwt;
         hasUpdates = true;
       }
 
@@ -54,6 +49,6 @@ export function registerConfigCommand(program: Command): void {
         console.log("Config updated.");
       }
 
-      printConfig();
+      await printConfig();
     });
 }

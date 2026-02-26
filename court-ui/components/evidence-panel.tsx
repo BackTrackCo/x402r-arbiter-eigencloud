@@ -10,13 +10,31 @@ interface EvidencePanelProps {
   entries: EvidenceEntry[];
 }
 
-function JsonBlock({ data }: { data: Record<string, unknown> }) {
+function PartyContent({ data }: { data: Record<string, unknown> }) {
+  // Separate main fields from long-form evidence/message
+  const longKeys = ["evidence", "message", "reason", "description", "details"];
+  const mainFields = Object.entries(data).filter(
+    ([key]) => !longKeys.includes(key) && key !== "type",
+  );
+  const longFields = Object.entries(data).filter(([key]) =>
+    longKeys.includes(key),
+  );
+  const typeField = "type" in data ? String(data.type) : null;
+
   return (
-    <div className="space-y-1 text-xs">
-      {Object.entries(data).map(([key, value]) => (
-        <div key={key} className="flex gap-2">
-          <span className="text-muted-foreground shrink-0 uppercase tracking-wider">
-            {key}:
+    <div className="space-y-2 text-xs">
+      {typeField ? (
+        <div>
+          <span className="text-muted-foreground uppercase tracking-wider">
+            TYPE:{" "}
+          </span>
+          <span className="font-medium">{typeField}</span>
+        </div>
+      ) : null}
+      {mainFields.map(([key, value]) => (
+        <div key={key}>
+          <span className="text-muted-foreground uppercase tracking-wider">
+            {key}:{" "}
           </span>
           <span className="break-all">
             {typeof value === "object" && value !== null
@@ -25,6 +43,21 @@ function JsonBlock({ data }: { data: Record<string, unknown> }) {
           </span>
         </div>
       ))}
+      {longFields.length > 0 ? (
+        <>
+          <Separator />
+          {longFields.map(([key, value]) => (
+            <div key={key}>
+              <p className="text-muted-foreground uppercase tracking-wider mb-1">
+                {key}
+              </p>
+              <p className="whitespace-pre-wrap text-muted-foreground/80">
+                {String(value)}
+              </p>
+            </div>
+          ))}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -141,7 +174,26 @@ function EvidenceRow({
         onClick={handleExpand}
         className="w-full text-left p-3 hover:bg-white/[0.03] transition-colors"
       >
-        <div className="flex items-center gap-4 text-xs">
+        {/* Mobile: two-line layout */}
+        <div className="flex flex-col gap-1 sm:hidden text-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">#{index}</span>
+              <span className="uppercase tracking-wider font-medium">
+                {role}
+              </span>
+            </div>
+            <span className="text-muted-foreground">
+              {expanded ? "\u2212" : "+"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span>{truncateAddress(entry.submitter as string)}</span>
+            <span className="text-[10px]">{timestamp}</span>
+          </div>
+        </div>
+        {/* Desktop: single row */}
+        <div className="hidden sm:flex items-center gap-4 text-xs">
           <span className="text-muted-foreground w-6">#{index}</span>
           <span className="uppercase tracking-wider w-20 font-medium">
             {role}
@@ -164,7 +216,7 @@ function EvidenceRow({
           ) : isArbiter && parsed ? (
             <ArbiterContent data={parsed} />
           ) : parsed ? (
-            <JsonBlock data={parsed} />
+            <PartyContent data={parsed} />
           ) : (
             <div className="text-xs">
               {isCid && (

@@ -17,26 +17,41 @@ import {
 import { getEvidenceBatch } from "@/lib/contracts";
 
 const PAGE_SIZE = 10;
-const STALE_PENDING_S = 60; // seconds — hide pending disputes older than this
+const STALE_PENDING_S = 5 * 60; // 5 minutes — hide stale pending disputes
 
 interface DisputeWithKey extends DisputeDetail {
   compositeKey: string;
 }
 
-/** For a pending dispute, fetch the first evidence entry's on-chain timestamp.
- *  Returns epoch seconds, or null if no evidence / paymentInfo unavailable. */
-async function getDisputeCreatedAt(
+/** Fetch evidence metadata for filtering.
+ *  Returns { createdAt, hasWrongOrder } or null if unavailable. */
+async function getDisputeMeta(
   paymentInfoHash: string,
   nonce: string,
-): Promise<number | null> {
+): Promise<{ createdAt: number | null; hasWrongOrder: boolean }> {
   try {
     const pi = await fetchPaymentInfo(paymentInfoHash);
-    if (!pi) return null;
-    const { entries } = await getEvidenceBatch(pi, BigInt(nonce), 0n, 1n);
-    if (entries.length === 0) return null;
-    return Number(entries[0].timestamp);
+    if (!pi) return { createdAt: null, hasWrongOrder: false };
+    const { entries } = await getEvidenceBatch(pi, BigInt(nonce), 0n, 50n);
+    if (entries.length === 0) return { createdAt: null, hasWrongOrder: false };
+
+    const createdAt = Number(entries[0].timestamp);
+
+    // Check for wrong order: arbiter (role 2) appearing before receiver (role 1)
+    let hasWrongOrder = false;
+    let arbiterIndex = -1;
+    let receiverIndex = -1;
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i].role === 2 && arbiterIndex === -1) arbiterIndex = i;
+      if (entries[i].role === 1 && receiverIndex === -1) receiverIndex = i;
+    }
+    if (arbiterIndex !== -1 && (receiverIndex === -1 || arbiterIndex < receiverIndex)) {
+      hasWrongOrder = true;
+    }
+
+    return { createdAt, hasWrongOrder };
   } catch {
-    return null;
+    return { createdAt: null, hasWrongOrder: false };
   }
 }
 
@@ -54,7 +69,7 @@ export default function Dashboard() {
         .then((h) => { setHealth(h); setHealthError(null); })
         .catch((err) => setHealthError(err.message));
     poll();
-    const interval = setInterval(poll, 10000);
+    const interval = setInterval(poll, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -71,20 +86,25 @@ export default function Dashboard() {
         }),
       );
 
-      // Resolved disputes always show. For pending ones, check on-chain age.
+      // Filter out stale pending disputes and disputes with wrong evidence order
       const nowS = Math.floor(Date.now() / 1000);
       const visible: DisputeWithKey[] = [];
 
       for (const d of details) {
-        if (d.status !== 0) {
-          visible.push(d);
+        const meta = await getDisputeMeta(d.paymentInfoHash, d.nonce);
+
+        // Hide disputes where arbiter submitted before receiver
+        if (meta.hasWrongOrder) continue;
+
+        // Pending — hide if older than 5 minutes
+        if (d.status === 0) {
+          if (meta.createdAt !== null && nowS - meta.createdAt < STALE_PENDING_S) {
+            visible.push(d);
+          }
           continue;
         }
-        // Pending — check first evidence timestamp on-chain
-        const createdAt = await getDisputeCreatedAt(d.paymentInfoHash, d.nonce);
-        if (createdAt !== null && nowS - createdAt < STALE_PENDING_S) {
-          visible.push(d);
-        }
+
+        visible.push(d);
       }
 
       setTotal(visible.length);
@@ -101,7 +121,7 @@ export default function Dashboard() {
   }, [loadDisputes]);
 
   useEffect(() => {
-    const interval = setInterval(() => loadDisputes(offset, true), 5000);
+    const interval = setInterval(() => loadDisputes(offset, true), 15000);
     return () => clearInterval(interval);
   }, [loadDisputes, offset]);
 
@@ -117,7 +137,7 @@ export default function Dashboard() {
             Arbiter offline — {healthError}
           </div>
         ) : health ? (
-          <div className="border border-border p-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+          <div className="border border-border p-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
             <Field label="ADDRESS" value={truncateAddress(health.arbiterAddress)} />
             <Field label="MODEL" value={health.model} />
             <Field label="THRESHOLD" value={String(health.confidenceThreshold)} />

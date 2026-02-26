@@ -42,7 +42,7 @@ export function registerStatusCommand(program: Command): void {
       }
 
       // Fall back to on-chain query
-      const { publicClient, addresses, operatorAddress } = initReadOnly();
+      const { publicClient, addresses, operatorAddress } = await initReadOnly();
       const paymentInfo = getPaymentInfo(options);
       const nonce = getNonce(options);
 

@@ -12,6 +12,27 @@ import { truncateHash, formatAmount } from "@/lib/utils";
 import { fetchDispute, fetchPaymentInfo, type DisputeDetail } from "@/lib/api";
 import { getEvidenceBatch, type EvidenceEntry } from "@/lib/contracts";
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="ml-1.5 text-muted-foreground hover:text-foreground transition-colors text-xs"
+      title="Copy to clipboard"
+    >
+      {copied ? "copied" : "copy"}
+    </button>
+  );
+}
+
 export default function DisputeDetailPage() {
   const params = useParams<{ compositeKey: string }>();
   const compositeKey = params.compositeKey;
@@ -117,6 +138,7 @@ export default function DisputeDetailPage() {
           <h1 className="text-base font-semibold">
             {truncateHash(compositeKey)}
           </h1>
+          <CopyButton text={compositeKey} />
           <StatusBadge status={dispute.status} />
         </div>
 
@@ -124,6 +146,7 @@ export default function DisputeDetailPage() {
           <div>
             <p className="text-muted-foreground uppercase tracking-wider mb-0.5">
               PAYMENT INFO HASH
+              <CopyButton text={dispute.paymentInfoHash} />
             </p>
             <p className="break-all">{dispute.paymentInfoHash}</p>
           </div>

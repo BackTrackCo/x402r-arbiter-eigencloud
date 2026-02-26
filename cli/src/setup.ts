@@ -14,7 +14,7 @@ import {
 import { baseSepolia, base, sepolia } from "viem/chains";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { resolveAddresses, type ResolvedAddresses } from "@x402r/core";
-import { getConfig } from "./config.js";
+import { getConfig, getConfigWithDiscovery } from "./config.js";
 
 const CHAINS: Record<number, Chain> = {
   84532: baseSepolia,
@@ -34,9 +34,10 @@ export interface CliSetup {
 
 /**
  * Initialize CLI: validates config, creates viem clients.
+ * Auto-discovers operator and network from arbiter if not set locally.
  */
-export function initCli(): CliSetup {
-  const config = getConfig();
+export async function initCli(): Promise<CliSetup> {
+  const config = await getConfigWithDiscovery();
 
   if (!config.privateKey) {
     console.error("Error: Private key not configured.");
@@ -78,9 +79,10 @@ export function initCli(): CliSetup {
 
 /**
  * Read-only setup — no private key required.
+ * Auto-discovers operator and network from arbiter if not set locally.
  */
-export function initReadOnly(): Pick<CliSetup, "publicClient" | "networkId" | "addresses" | "arbiterUrl" | "operatorAddress"> {
-  const config = getConfig();
+export async function initReadOnly(): Promise<Pick<CliSetup, "publicClient" | "networkId" | "addresses" | "arbiterUrl" | "operatorAddress">> {
+  const config = await getConfigWithDiscovery();
   const addresses = resolveAddresses(config.networkId);
 
   const chainId = addresses.chainId;

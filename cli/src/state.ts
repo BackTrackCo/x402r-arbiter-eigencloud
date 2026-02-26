@@ -17,6 +17,7 @@ export interface PaymentState {
   paymentHash: string;
   timestamp: string;
   networkId: string;
+  merchantPrivateKey?: string;
 }
 
 const STATE_DIR = path.join(os.homedir(), ".x402r");

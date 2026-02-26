@@ -2,6 +2,21 @@
 // For local dev, NEXT_PUBLIC_ARBITER_URL can point directly at the arbiter.
 const ARBITER_URL = process.env.NEXT_PUBLIC_ARBITER_URL || "/arbiter";
 
+/** Fetch with retry on 429/500 (up to 3 attempts with exponential backoff) */
+async function fetchWithRetry(input: RequestInfo, init?: RequestInit, maxRetries = 3): Promise<Response> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const res = await fetch(input, init);
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        continue;
+      }
+    }
+    return res;
+  }
+  return fetch(input, init); // unreachable but satisfies TS
+}
+
 export interface HealthResponse {
   status: string;
   arbiterAddress: string;
@@ -41,7 +56,7 @@ export interface VerifyResponse {
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${ARBITER_URL}/health`);
+  const res = await fetchWithRetry(`${ARBITER_URL}/health`);
   if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
   return res.json();
 }
@@ -56,13 +71,13 @@ export async function fetchDisputes(
     count: String(count),
   });
   if (receiver) params.set("receiver", receiver);
-  const res = await fetch(`${ARBITER_URL}/api/disputes?${params}`);
+  const res = await fetchWithRetry(`${ARBITER_URL}/api/disputes?${params}`);
   if (!res.ok) throw new Error(`Failed to fetch disputes: ${res.status}`);
   return res.json();
 }
 
 export async function fetchDispute(compositeKey: string): Promise<DisputeDetail> {
-  const res = await fetch(`${ARBITER_URL}/api/dispute/${compositeKey}`);
+  const res = await fetchWithRetry(`${ARBITER_URL}/api/dispute/${compositeKey}`);
   if (!res.ok) throw new Error(`Failed to fetch dispute: ${res.status}`);
   return res.json();
 }
@@ -70,7 +85,7 @@ export async function fetchDispute(compositeKey: string): Promise<DisputeDetail>
 export async function fetchPaymentInfo(
   paymentInfoHash: string,
 ): Promise<Record<string, unknown> | null> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${ARBITER_URL}/api/payment-info/${paymentInfoHash}`,
   );
   if (res.status === 404) return null;
@@ -82,7 +97,7 @@ export async function verifyDispute(
   paymentInfo: Record<string, unknown>,
   nonce: string,
 ): Promise<VerifyResponse> {
-  const res = await fetch(`${ARBITER_URL}/api/verify`, {
+  const res = await fetchWithRetry(`${ARBITER_URL}/api/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paymentInfo, nonce }),

@@ -15,7 +15,7 @@ export function registerVerifyCommand(program: Command): void {
     .option("-n, --nonce <nonce>", "Nonce")
     .action(async (options) => {
       const config = getConfig();
-      const { arbiterUrl } = initReadOnly();
+      const { arbiterUrl } = await initReadOnly();
       const paymentInfo = getPaymentInfo(options);
       const nonce = getNonce(options);
 

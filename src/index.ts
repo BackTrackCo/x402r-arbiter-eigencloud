@@ -30,9 +30,44 @@ import {
   RefundRequestABI,
   type PaymentInfo,
 } from "@x402r/core";
+import type { Evidence } from "@x402r/core";
 import { createCommitment } from "./commitment.js";
 import { SYSTEM_PROMPT, buildPrompt } from "./prompts.js";
 import { EigenAIClient } from "./eigenai-client.js";
+
+
+/** Pin JSON to IPFS via Pinata. Falls back to a hash-based CID placeholder. */
+async function pinToIpfs(data: Record<string, unknown>, label = "evidence"): Promise<string> {
+  if (PINATA_JWT) {
+    try {
+      const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${PINATA_JWT}` },
+        body: JSON.stringify({ pinataContent: data, pinataMetadata: { name: `x402r-${label}-${Date.now()}` } }),
+      });
+      if (res.ok) {
+        const result = (await res.json()) as { IpfsHash: string };
+        return result.IpfsHash;
+      }
+      console.warn(`Pinata failed (${res.status}) — using placeholder CID`);
+    } catch (err) {
+      console.warn(`Pinata error:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Arbiter evidence must be pinned — no fallback
+  throw new Error("PINATA_JWT is required to pin arbiter evidence to IPFS");
+}
+
+/** Keep only the first (earliest) evidence entry per role. */
+function firstEvidencePerRole(entries: Evidence[]): Evidence[] {
+  const seen = new Set<number>();
+  return entries.filter((e) => {
+    if (seen.has(e.role)) return false;
+    seen.add(e.role);
+    return true;
+  });
+}
 
 dotenv.config();
 
@@ -55,6 +90,7 @@ const ESCROW_PERIOD_SECONDS = BigInt(
 ); // 7 days default
 const OPERATOR_FEE_BPS = BigInt(process.env.OPERATOR_FEE_BPS ?? "100"); // 1% default
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
+const PINATA_JWT = process.env.PINATA_JWT;
 
 // Auto-generate mnemonic if no key is provided (fallback for fresh setups)
 const generatedMnemonic =
@@ -93,6 +129,7 @@ const addresses = resolveAddresses(networkId);
 
 // --- SDK arbiter (initialized after operator is resolved) ---
 let arbiter: X402rArbiter;
+
 
 function initArbiter(operatorAddr: Address) {
   arbiter = new X402rArbiter({
@@ -144,7 +181,9 @@ const evaluatedDisputes = new Set<string>();
 // --- Global ordered dispute keys (newest first, from on-chain events) ---
 let orderedDisputeKeys: Hex[] = [];
 const disputeIndexedAt = new Map<string, number>(); // compositeKey → epoch ms
-const MAX_BLOCK_RANGE = 50000n;
+// Sepolia RPCs limit to 1000 blocks; Base is more generous
+// Public RPCs limit eth_getLogs range: Eth Sepolia ~1000, Base Sepolia ~10000, Base mainnet ~50000
+const MAX_BLOCK_RANGE = CHAIN_ID === 11155111 ? 1000n : CHAIN_ID === 84532 ? 9000n : 50000n;
 
 // --- Indexed disputes for auto-evaluation (piHash-nonce → PaymentInfo+nonce) ---
 const indexedDisputes = new Map<string, { paymentInfo: PaymentInfo; nonce: bigint }>();
@@ -268,6 +307,36 @@ app.get("/api/contracts", (_req, res) => {
   });
 });
 
+// --- Pin evidence to IPFS (so clients don't need their own Pinata key) ---
+app.post("/api/pin", async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data || typeof data !== "object") {
+      res.status(400).json({ error: "JSON body required" });
+      return;
+    }
+    if (!PINATA_JWT) {
+      res.status(503).json({ error: "Pinata not configured on this arbiter" });
+      return;
+    }
+    const cid = await pinToIpfs(data, "client-evidence");
+    res.json({ cid });
+  } catch (err) {
+    console.error("Pin error:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// --- Policy endpoint ---
+app.get("/api/policy", (_req, res) => {
+  res.json({
+    maxEvidencePerRole: 1,
+    model: EIGENAI_MODEL,
+    confidenceThreshold: CONFIDENCE_THRESHOLD,
+    note: "Only the first evidence submission per role (payer/receiver) is considered during evaluation.",
+  });
+});
+
 // --- PaymentInfo cache endpoints ---
 app.post("/api/payment-info", (req, res) => {
   try {
@@ -321,8 +390,9 @@ async function evaluateDispute(
   paymentInfo: PaymentInfo,
   nonce: bigint,
 ): Promise<EvaluateResult> {
-  // 1. Get all evidence
-  const evidence = await arbiter.getAllEvidence(paymentInfo, nonce);
+  // 1. Get all evidence — only consider the first submission per role
+  const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonce);
+  const evidence = firstEvidencePerRole(allEvidence);
   if (evidence.length === 0) {
     throw new Error("No evidence submitted for this dispute");
   }
@@ -380,7 +450,7 @@ async function evaluateDispute(
   const outcome = meetsThreshold ? "approve" : "deny";
 
   // 7. Submit arbiter evidence (commitment + decision)
-  const evidenceCid = JSON.stringify({
+  const evidenceData = {
     type: "arbiter-ruling",
     decision: outcome,
     reasoning: decision.reasoning,
@@ -392,7 +462,8 @@ async function evaluateDispute(
       seed: commitment.seed,
     },
     model: EIGENAI_MODEL,
-  });
+  };
+  const evidenceCid = await pinToIpfs(evidenceData, "arbiter-ruling");
   const submitTx = await arbiter.submitEvidence(
     paymentInfo,
     nonce,
@@ -514,15 +585,18 @@ app.post("/api/verify", async (req, res) => {
     const nonceBI = BigInt(nonce);
 
     // Separate arbiter evidence (to extract seed) from party evidence (for prompt)
-    const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
-    const arbiterEvidence = allEvidence.filter((e) => e.role === 2);
-    const evidence = allEvidence.filter((e) => e.role !== 2);
+    // Only consider first evidence per role to match evaluate behavior
+    const rawEvidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
+    const deduped = firstEvidencePerRole(rawEvidence);
+    const arbiterEvidence = deduped.filter((e) => e.role === 2);
+    const evidence = deduped.filter((e) => e.role !== 2);
 
-    // Extract seed from the arbiter's on-chain evidence
+    // Extract seed from the arbiter's on-chain evidence (may be IPFS CID or inline JSON)
     let seed = EIGENAI_SEED; // fallback to global default
     for (const entry of arbiterEvidence) {
       try {
-        const parsed = JSON.parse(entry.cid);
+        const content = await resolveEvidenceContent(entry.cid);
+        const parsed = typeof content === "string" ? JSON.parse(content) : content;
         if (parsed.commitment?.seed !== undefined) {
           seed = parsed.commitment.seed;
           break;
@@ -532,7 +606,7 @@ app.post("/api/verify", async (req, res) => {
           break;
         }
       } catch {
-        // Not JSON — skip
+        // Failed to resolve — skip
       }
     }
 
@@ -577,7 +651,12 @@ app.post("/api/verify", async (req, res) => {
 });
 
 // --- Start server ---
-const INDEX_INTERVAL_MS = 15_000;
+const INDEX_INTERVAL_MS = 30_000; // 30s — gentle on free RPCs
+const AUTO_EVAL_POLL_MS = 30_000; // 30s — staggered from index poller
+const INTER_DISPUTE_DELAY_MS = 2_000; // 2s pause between checking each dispute
+
+/** Sleep helper */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function start() {
   // 1. Deploy operator if not provided
@@ -603,7 +682,7 @@ async function start() {
 
   // 4. Start HTTP server
   app.listen(PORT, () => {
-    console.log(`x402r Arbiter (EigenCloud) listening on port ${PORT}`);
+    console.log(`MoltArbiter listening on port ${PORT}`);
     console.log(`  Arbiter address: ${account.address}`);
     console.log(`  Network: ${networkId} (${chain.name})`);
     console.log(`  Operator: ${OPERATOR_ADDRESS ?? "not deployed (needs funding)"}`);
@@ -620,69 +699,126 @@ async function start() {
   });
 
   // 5. Poll indexed disputes for evidence and auto-evaluate
-  //    Instead of decoding EvidenceSubmitted events (which had ABI issues),
-  //    periodically check each indexed dispute's evidence via getAllEvidence()
-  //    view calls. Simpler and guaranteed to work.
+  //    Staggered 15s after the index poller to spread RPC load.
+  //    Adds a 2s pause between checking each dispute to avoid burst calls.
   if (OPERATOR_ADDRESS) {
-    const AUTO_EVAL_POLL_MS = 15_000;
+    console.log(`  Starting auto-evaluation poller (every ${AUTO_EVAL_POLL_MS / 1000}s, staggered)...`);
 
-    console.log(`  Starting auto-evaluation poller (every ${AUTO_EVAL_POLL_MS / 1000}s)...`);
+    // Stagger start so index + auto-eval don't fire simultaneously
+    setTimeout(() => {
+      setInterval(async () => {
+        try {
+          for (const [disputeKey, { paymentInfo, nonce }] of indexedDisputes) {
+            if (evaluatedDisputes.has(disputeKey)) continue;
 
-    setInterval(async () => {
-      try {
-        // Re-index to pick up new disputes
-        await indexAndCachePaymentInfo();
+            // Pause between disputes to avoid RPC bursts
+            await sleep(INTER_DISPUTE_DELAY_MS);
 
-        for (const [disputeKey, { paymentInfo, nonce }] of indexedDisputes) {
-          if (evaluatedDisputes.has(disputeKey)) continue;
-
-          const allEvidence = await arbiter.getAllEvidence(paymentInfo, nonce);
-          const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
-          const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
-          const hasArbiterEvidence = allEvidence.some((e) => e.role === 2);
-
-          // Skip if arbiter already submitted (evaluated elsewhere, e.g. manual /api/evaluate)
-          if (hasArbiterEvidence) {
-            evaluatedDisputes.add(disputeKey);
-            continue;
-          }
-
-          // Skip if already resolved on-chain (status != 0/Pending)
-          const currentStatus = await arbiter.getRefundStatus(paymentInfo, nonce);
-          if (currentStatus !== 0) {
-            evaluatedDisputes.add(disputeKey);
-            continue;
-          }
-
-          if (!hasPayerEvidence || !hasReceiverEvidence) continue;
-
-          // Both parties have submitted — evaluate
-          console.log(`[auto-eval] Both parties submitted evidence for ${disputeKey.slice(0, 20)}... — evaluating`);
-          evaluatedDisputes.add(disputeKey);
-
-          try {
-            const result = await evaluateDispute(paymentInfo, nonce);
-            console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
-            console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
-            console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
-            if (result.refundTx) {
-              console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
+            let allEvidence;
+            try {
+              allEvidence = await arbiter.getAllEvidence(paymentInfo, nonce);
+            } catch (err) {
+              const msg = String(err);
+              if (msg.includes("429") || msg.includes("rate")) {
+                console.warn(`[auto-eval] Rate limited — backing off`);
+                await sleep(10_000);
+                break; // stop this poll cycle, retry next interval
+              }
+              throw err;
             }
-          } catch (err) {
-            const errMsg = String(err);
-            console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
-            // Only retry on transient errors; updateStatus reverts are permanent
-            if (errMsg.includes("updateStatus") || errMsg.includes("revert")) {
-              console.log(`[auto-eval] Permanent failure — marking ${disputeKey.slice(0, 20)}... as evaluated`);
-            } else {
-              evaluatedDisputes.delete(disputeKey);
+
+            const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
+            const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
+            const hasArbiterEvidence = allEvidence.some((e) => e.role === 2);
+
+            // Check on-chain status
+            let currentStatus: number;
+            try {
+              currentStatus = await arbiter.getRefundStatus(paymentInfo, nonce);
+            } catch (err) {
+              const msg = String(err);
+              if (msg.includes("429") || msg.includes("rate")) {
+                console.warn(`[auto-eval] Rate limited — backing off`);
+                await sleep(10_000);
+                break;
+              }
+              throw err;
+            }
+
+            // Skip if already resolved on-chain (status != 0/Pending)
+            if (currentStatus !== 0) {
+              evaluatedDisputes.add(disputeKey);
+              continue;
+            }
+
+            // Recovery: arbiter evidence exists but decision tx never landed
+            if (hasArbiterEvidence) {
+              console.log(`[auto-eval] Arbiter evidence exists but status still Pending for ${disputeKey.slice(0, 20)}... — retrying decision tx`);
+              try {
+                // Resolve the arbiter's evidence (may be IPFS CID or inline JSON)
+                const arbiterEntry = allEvidence.find((e) => e.role === 2)!;
+                const content = await resolveEvidenceContent(arbiterEntry.cid);
+                const ruling = typeof content === "string" ? JSON.parse(content) : content;
+                const shouldApprove = ruling.decision === "approve";
+
+                if (shouldApprove) {
+                  const tx = await arbiter.approveRefundRequest(paymentInfo, nonce);
+                  console.log(`[auto-eval] Recovery approve tx: ${tx.txHash}`);
+                  try {
+                    const refundTx = await arbiter.executeRefundInEscrow(paymentInfo);
+                    console.log(`[auto-eval] Recovery refund tx: ${refundTx.txHash}`);
+                  } catch (refundErr) {
+                    console.warn("[auto-eval] Recovery refund execution failed:", refundErr);
+                  }
+                } else {
+                  const tx = await arbiter.denyRefundRequest(paymentInfo, nonce);
+                  console.log(`[auto-eval] Recovery deny tx: ${tx.txHash}`);
+                }
+                evaluatedDisputes.add(disputeKey);
+              } catch (err) {
+                const errMsg = String(err);
+                console.error(`[auto-eval] Recovery failed for ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
+                if (errMsg.includes("429") || errMsg.includes("rate")) {
+                  await sleep(10_000);
+                  break;
+                }
+                // Mark as permanently failed — don't retry
+                evaluatedDisputes.add(disputeKey);
+              }
+              continue;
+            }
+
+            // Require both payer and merchant evidence before evaluating
+            if (!hasPayerEvidence || !hasReceiverEvidence) continue;
+
+            console.log(`[auto-eval] Both parties submitted evidence for ${disputeKey.slice(0, 20)}... — evaluating`);
+            evaluatedDisputes.add(disputeKey);
+
+            try {
+              const result = await evaluateDispute(paymentInfo, nonce);
+              console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
+              console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
+              console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
+              if (result.refundTx) {
+                console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
+              }
+            } catch (err) {
+              const errMsg = String(err);
+              console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
+              // Only retry on transient errors; updateStatus reverts and payload errors are permanent
+              const isPermanent = errMsg.includes("updateStatus") || errMsg.includes("revert") || errMsg.includes("413");
+              if (isPermanent) {
+                console.log(`[auto-eval] Permanent failure — marking ${disputeKey.slice(0, 20)}... as evaluated`);
+              } else {
+                evaluatedDisputes.delete(disputeKey);
+              }
             }
           }
+        } catch (err) {
+          console.error("[auto-eval] Poll error:", err);
         }
-      } catch (err) {
-        console.error("[auto-eval] Poll error:", err);
-      }
-    }, AUTO_EVAL_POLL_MS);
+      }, AUTO_EVAL_POLL_MS);
+    }, INDEX_INTERVAL_MS / 2); // start auto-eval 15s after boot, staggered from index poller
   }
 }
 

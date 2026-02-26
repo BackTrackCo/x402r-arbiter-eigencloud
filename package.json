@@ -17,7 +17,8 @@
     "merchant:bot": "tsx src/merchant-bot.ts",
     "facilitator": "tsx src/facilitator-server.ts",
     "dashboard": "pnpm --filter court-ui dev",
-    "dashboard:build": "pnpm --filter court-ui build"
+    "dashboard:build": "pnpm --filter court-ui build",
+    "dev:all": "concurrently -n arbiter,merchant,bot,dashboard -c blue,green,cyan,magenta \"pnpm dev\" \"pnpm merchant\" \"pnpm merchant:bot\" \"pnpm dashboard\""
   },
   "dependencies": {
     "@x402r/arbiter": "^0.0.2",
@@ -40,6 +41,7 @@
     "@x402r/evm": "^0.0.2",
     "@x402r/helpers": "^0.0.2",
     "@x402r/merchant": "^0.0.2",
+    "concurrently": "^9.2.1",
     "shadcn": "^3.8.5",
     "tailwindcss": "^4.2.0",
     "tsx": "^4.19.0",

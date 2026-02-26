@@ -1,31 +1,94 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Separator } from "@/components/ui/separator";
+import { fetchHealth, type HealthResponse } from "@/lib/api";
 
 const MERCHANT_URL = "https://x402r-test-merchant-production.up.railway.app";
-const OPERATOR = "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0";
-const ARBITER_URL = "https://x402r-arbiter-eigencloud.vercel.app/arbiter";
+
+interface ContractsResponse {
+  chainId: number;
+  rpcUrl: string;
+  operatorAddress: string | null;
+  arbiterAddress: string;
+  escrowAddress: string;
+  refundRequestAddress: string;
+  evidenceAddress: string;
+  usdcAddress: string;
+}
+
+const CHAIN_NAMES: Record<number, string> = {
+  84532: "Base Sepolia",
+  8453: "Base",
+  11155111: "Ethereum Sepolia",
+  1: "Ethereum",
+};
 
 export default function GuidePage() {
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [contracts, setContracts] = useState<ContractsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const arbiterUrl =
+      process.env.NEXT_PUBLIC_ARBITER_URL || "/arbiter";
+
+    Promise.allSettled([
+      fetchHealth(),
+      fetch(`${arbiterUrl}/api/contracts`).then((r) =>
+        r.ok ? (r.json() as Promise<ContractsResponse>) : null,
+      ),
+    ]).then(([hResult, cResult]) => {
+      if (hResult.status === "fulfilled") setHealth(hResult.value);
+      if (cResult.status === "fulfilled" && cResult.value)
+        setContracts(cResult.value);
+      setLoading(false);
+    });
+  }, []);
+
+  const operator =
+    contracts?.operatorAddress ?? health?.operatorAddress ?? "loading...";
+  const network = health
+    ? `${CHAIN_NAMES[health.chainId] ?? health.network} (eip155:${health.chainId})`
+    : "loading...";
+  const arbiterAddr = health?.arbiterAddress ?? contracts?.arbiterAddress ?? "loading...";
+  const arbiterUrl =
+    typeof window !== "undefined" ? window.location.origin + "/arbiter" : "https://<your-arbiter>/arbiter";
+
   return (
     <div className="space-y-6">
-      {/* Merchant Server */}
+      {/* Live Config */}
       <section>
         <h2 className="text-xs text-muted-foreground uppercase tracking-widest mb-3">
-          TEST MERCHANT
+          LIVE CONFIG
+          {loading && (
+            <span className="ml-2 text-muted-foreground/60 normal-case">
+              fetching...
+            </span>
+          )}
         </h2>
         <div className="border border-border p-4 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-            <Field label="ENDPOINT" value={`${MERCHANT_URL}/weather`} mono />
+            <Field label="MERCHANT" value={`${MERCHANT_URL}/weather`} mono />
             <Field label="PRICE" value="$0.01 USDC (escrow)" />
-            <Field label="OPERATOR" value={OPERATOR} mono />
-            <Field label="ARBITER" value={ARBITER_URL} mono />
-            <Field label="NETWORK" value="Eth Sepolia (eip155:11155111)" />
+            <Field label="OPERATOR" value={operator} mono />
+            <Field label="ARBITER ADDRESS" value={arbiterAddr} mono />
+            <Field label="ARBITER URL" value={arbiterUrl} mono />
+            <Field label="NETWORK" value={network} />
+            {health && (
+              <>
+                <Field label="MODEL" value={health.model} />
+                <Field
+                  label="CONFIDENCE THRESHOLD"
+                  value={String(health.confidenceThreshold)}
+                />
+              </>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
-            Returns weather data behind an x402r escrow paywall.
-            A merchant dispute bot automatically submits evidence when
-            refund requests are filed.
+            Values fetched live from the arbiter&apos;s{" "}
+            <span className="text-foreground">/health</span> and{" "}
+            <span className="text-foreground">/api/contracts</span> endpoints.
           </p>
         </div>
       </section>
@@ -45,6 +108,46 @@ export default function GuidePage() {
           <p className="text-muted-foreground mt-2">
             Should return HTTP 402 with escrow payment options.
           </p>
+        </div>
+      </section>
+
+      <Separator />
+
+      {/* API Reference */}
+      <section>
+        <h2 className="text-xs text-muted-foreground uppercase tracking-widest mb-3">
+          API REFERENCE
+        </h2>
+        <div className="border border-border p-4 space-y-4 text-xs">
+          <p className="text-muted-foreground mb-2">
+            All endpoints are relative to the arbiter base URL.
+          </p>
+
+          <Endpoint method="GET" path="/health" desc="Status, model, threshold, network info" />
+          <Code>{`curl ${arbiterUrl}/health`}</Code>
+
+          <Endpoint method="GET" path="/api/contracts" desc="Contract addresses + chain config" />
+          <Code>{`curl ${arbiterUrl}/api/contracts`}</Code>
+
+          <Endpoint method="GET" path="/api/policy" desc="Evaluation policy (system prompt hash, model, threshold)" />
+
+          <Endpoint method="POST" path="/api/pin" desc="Pin evidence JSON to IPFS (no auth needed)" />
+          <Code>{`curl -X POST ${arbiterUrl}/api/pin \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"client-evidence","message":"Data was incorrect"}'`}</Code>
+
+          <Endpoint method="POST" path="/api/payment-info" desc="Cache payment info for dashboard lookups" />
+
+          <Endpoint method="GET" path="/api/payment-info/:hash" desc="Retrieve cached payment info by hash" />
+
+          <Endpoint method="POST" path="/api/evaluate" desc="Trigger dispute evaluation (requires paymentInfo + nonce)" />
+
+          <Endpoint method="GET" path="/api/disputes?offset=&count=" desc="List disputes (paginated, newest first)" />
+          <Code>{`curl "${arbiterUrl}/api/disputes?offset=0&count=5"`}</Code>
+
+          <Endpoint method="GET" path="/api/dispute/:compositeKey" desc="Dispute detail (status, amount, nonce)" />
+
+          <Endpoint method="POST" path="/api/verify" desc="Replay AI evaluation, verify commitment hash" />
         </div>
       </section>
 
@@ -76,13 +179,13 @@ export default function GuidePage() {
             <p className="text-muted-foreground mb-2">
               Tell your bot to set up the x402r config with these details:
             </p>
-            <Code>{`Operator: ${OPERATOR}
-Network:  eip155:11155111 (Eth Sepolia)
-Arbiter:  ${ARBITER_URL}
+            <Code>{`Operator: ${operator}
+Network:  ${network}
+Arbiter:  ${arbiterUrl}
 Merchant: ${MERCHANT_URL}/weather`}</Code>
             <p className="text-muted-foreground mt-2">
-              The bot needs a funded Base Sepolia wallet with testnet USDC
-              and ETH for gas. Config is persisted to{" "}
+              The bot needs a funded wallet with USDC and ETH for gas.
+              Config is persisted to{" "}
               <span className="text-foreground">~/.x402r/config.json</span>.
             </p>
           </Step>
@@ -179,6 +282,16 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
     <div className="text-xs">
       <p className="text-muted-foreground uppercase tracking-wider mb-0.5">{label}</p>
       <p className={`font-medium ${mono ? "break-all" : ""}`}>{value}</p>
+    </div>
+  );
+}
+
+function Endpoint({ method, path, desc }: { method: string; path: string; desc: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 pt-2 first:pt-0">
+      <span className="text-foreground font-semibold shrink-0">{method}</span>
+      <span className="text-foreground break-all">{path}</span>
+      <span className="text-muted-foreground">— {desc}</span>
     </div>
   );
 }

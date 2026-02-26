@@ -664,9 +664,11 @@ async function start() {
     try {
       OPERATOR_ADDRESS = await autoDeployOperator();
     } catch (err) {
+      const balance = await publicClient.getBalance({ address: account.address }).catch(() => 0n);
       console.error("Failed to deploy operator:", err);
       console.log("Starting server without operator — will retry when funded");
       console.log(`  Arbiter address: ${account.address}`);
+      console.log(`  Current balance: ${balance} wei`);
     }
   }
 

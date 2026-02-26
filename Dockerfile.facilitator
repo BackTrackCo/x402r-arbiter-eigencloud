@@ -34,14 +34,11 @@ WORKDIR /app
 COPY package.json ./
 RUN node -e " \
   const p = JSON.parse(require('fs').readFileSync('package.json','utf8')); \
-  const dev = p.devDependencies || {}; \
-  for (const k of Object.keys(dev)) { \
-    if (typeof dev[k] === 'string' && dev[k].startsWith('file:')) delete dev[k]; \
-  } \
+  delete p.devDependencies; \
   delete p.pnpm; \
   require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)); \
 "
-RUN pnpm install
+RUN pnpm install --prod
 
 COPY --from=builder /app/dist ./dist
 

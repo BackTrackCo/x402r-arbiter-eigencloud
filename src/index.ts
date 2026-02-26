@@ -665,7 +665,7 @@ async function start() {
       OPERATOR_ADDRESS = await autoDeployOperator();
     } catch (err) {
       console.error("Failed to deploy operator:", err);
-      console.log("Starting server without operator — fund the arbiter wallet and restart");
+      console.log("Starting server without operator — will retry when funded");
       console.log(`  Arbiter address: ${account.address}`);
     }
   }
@@ -698,128 +698,156 @@ async function start() {
     }
   });
 
+  // 4b. If operator not deployed, poll balance and retry
+  if (!OPERATOR_ADDRESS) {
+    const RETRY_INTERVAL_MS = 30_000;
+    console.log(`  Checking balance every ${RETRY_INTERVAL_MS / 1000}s for operator deployment...`);
+    const retryTimer = setInterval(async () => {
+      try {
+        const balance = await publicClient.getBalance({ address: account.address });
+        if (balance === 0n) return;
+        console.log(`  Balance detected (${balance} wei) — attempting operator deployment...`);
+        OPERATOR_ADDRESS = await autoDeployOperator();
+        clearInterval(retryTimer);
+        initArbiter(OPERATOR_ADDRESS);
+        await indexAndCachePaymentInfo();
+        setInterval(() => {
+          indexAndCachePaymentInfo().catch(() => {});
+        }, INDEX_INTERVAL_MS);
+        // Start auto-eval poller (staggered)
+        setTimeout(() => {
+          startAutoEvalPoller();
+        }, INDEX_INTERVAL_MS / 2);
+      } catch (err) {
+        console.warn("  Operator deploy retry failed:", err instanceof Error ? err.message : err);
+      }
+    }, RETRY_INTERVAL_MS);
+  }
+
   // 5. Poll indexed disputes for evidence and auto-evaluate
   //    Staggered 15s after the index poller to spread RPC load.
   //    Adds a 2s pause between checking each dispute to avoid burst calls.
   if (OPERATOR_ADDRESS) {
-    console.log(`  Starting auto-evaluation poller (every ${AUTO_EVAL_POLL_MS / 1000}s, staggered)...`);
-
-    // Stagger start so index + auto-eval don't fire simultaneously
     setTimeout(() => {
-      setInterval(async () => {
+      startAutoEvalPoller();
+    }, INDEX_INTERVAL_MS / 2);
+  }
+}
+
+function startAutoEvalPoller() {
+  console.log(`  Starting auto-evaluation poller (every ${AUTO_EVAL_POLL_MS / 1000}s, staggered)...`);
+  setInterval(async () => {
+    try {
+      for (const [disputeKey, { paymentInfo, nonce }] of indexedDisputes) {
+        if (evaluatedDisputes.has(disputeKey)) continue;
+
+        // Pause between disputes to avoid RPC bursts
+        await sleep(INTER_DISPUTE_DELAY_MS);
+
+        let allEvidence;
         try {
-          for (const [disputeKey, { paymentInfo, nonce }] of indexedDisputes) {
-            if (evaluatedDisputes.has(disputeKey)) continue;
+          allEvidence = await arbiter.getAllEvidence(paymentInfo, nonce);
+        } catch (err) {
+          const msg = String(err);
+          if (msg.includes("429") || msg.includes("rate")) {
+            console.warn(`[auto-eval] Rate limited — backing off`);
+            await sleep(10_000);
+            break; // stop this poll cycle, retry next interval
+          }
+          throw err;
+        }
 
-            // Pause between disputes to avoid RPC bursts
-            await sleep(INTER_DISPUTE_DELAY_MS);
+        const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
+        const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
+        const hasArbiterEvidence = allEvidence.some((e) => e.role === 2);
 
-            let allEvidence;
-            try {
-              allEvidence = await arbiter.getAllEvidence(paymentInfo, nonce);
-            } catch (err) {
-              const msg = String(err);
-              if (msg.includes("429") || msg.includes("rate")) {
-                console.warn(`[auto-eval] Rate limited — backing off`);
-                await sleep(10_000);
-                break; // stop this poll cycle, retry next interval
-              }
-              throw err;
-            }
+        // Check on-chain status
+        let currentStatus: number;
+        try {
+          currentStatus = await arbiter.getRefundStatus(paymentInfo, nonce);
+        } catch (err) {
+          const msg = String(err);
+          if (msg.includes("429") || msg.includes("rate")) {
+            console.warn(`[auto-eval] Rate limited — backing off`);
+            await sleep(10_000);
+            break;
+          }
+          throw err;
+        }
 
-            const hasPayerEvidence = allEvidence.some((e) => e.role === 0);
-            const hasReceiverEvidence = allEvidence.some((e) => e.role === 1);
-            const hasArbiterEvidence = allEvidence.some((e) => e.role === 2);
+        // Skip if already resolved on-chain (status != 0/Pending)
+        if (currentStatus !== 0) {
+          evaluatedDisputes.add(disputeKey);
+          continue;
+        }
 
-            // Check on-chain status
-            let currentStatus: number;
-            try {
-              currentStatus = await arbiter.getRefundStatus(paymentInfo, nonce);
-            } catch (err) {
-              const msg = String(err);
-              if (msg.includes("429") || msg.includes("rate")) {
-                console.warn(`[auto-eval] Rate limited — backing off`);
-                await sleep(10_000);
-                break;
-              }
-              throw err;
-            }
+        // Recovery: arbiter evidence exists but decision tx never landed
+        if (hasArbiterEvidence) {
+          console.log(`[auto-eval] Arbiter evidence exists but status still Pending for ${disputeKey.slice(0, 20)}... — retrying decision tx`);
+          try {
+            // Resolve the arbiter's evidence (may be IPFS CID or inline JSON)
+            const arbiterEntry = allEvidence.find((e) => e.role === 2)!;
+            const content = await resolveEvidenceContent(arbiterEntry.cid);
+            const ruling = typeof content === "string" ? JSON.parse(content) : content;
+            const shouldApprove = ruling.decision === "approve";
 
-            // Skip if already resolved on-chain (status != 0/Pending)
-            if (currentStatus !== 0) {
-              evaluatedDisputes.add(disputeKey);
-              continue;
-            }
-
-            // Recovery: arbiter evidence exists but decision tx never landed
-            if (hasArbiterEvidence) {
-              console.log(`[auto-eval] Arbiter evidence exists but status still Pending for ${disputeKey.slice(0, 20)}... — retrying decision tx`);
+            if (shouldApprove) {
+              const tx = await arbiter.approveRefundRequest(paymentInfo, nonce);
+              console.log(`[auto-eval] Recovery approve tx: ${tx.txHash}`);
               try {
-                // Resolve the arbiter's evidence (may be IPFS CID or inline JSON)
-                const arbiterEntry = allEvidence.find((e) => e.role === 2)!;
-                const content = await resolveEvidenceContent(arbiterEntry.cid);
-                const ruling = typeof content === "string" ? JSON.parse(content) : content;
-                const shouldApprove = ruling.decision === "approve";
-
-                if (shouldApprove) {
-                  const tx = await arbiter.approveRefundRequest(paymentInfo, nonce);
-                  console.log(`[auto-eval] Recovery approve tx: ${tx.txHash}`);
-                  try {
-                    const refundTx = await arbiter.executeRefundInEscrow(paymentInfo);
-                    console.log(`[auto-eval] Recovery refund tx: ${refundTx.txHash}`);
-                  } catch (refundErr) {
-                    console.warn("[auto-eval] Recovery refund execution failed:", refundErr);
-                  }
-                } else {
-                  const tx = await arbiter.denyRefundRequest(paymentInfo, nonce);
-                  console.log(`[auto-eval] Recovery deny tx: ${tx.txHash}`);
-                }
-                evaluatedDisputes.add(disputeKey);
-              } catch (err) {
-                const errMsg = String(err);
-                console.error(`[auto-eval] Recovery failed for ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
-                if (errMsg.includes("429") || errMsg.includes("rate")) {
-                  await sleep(10_000);
-                  break;
-                }
-                // Mark as permanently failed — don't retry
-                evaluatedDisputes.add(disputeKey);
+                const refundTx = await arbiter.executeRefundInEscrow(paymentInfo);
+                console.log(`[auto-eval] Recovery refund tx: ${refundTx.txHash}`);
+              } catch (refundErr) {
+                console.warn("[auto-eval] Recovery refund execution failed:", refundErr);
               }
-              continue;
+            } else {
+              const tx = await arbiter.denyRefundRequest(paymentInfo, nonce);
+              console.log(`[auto-eval] Recovery deny tx: ${tx.txHash}`);
             }
-
-            // Require both payer and merchant evidence before evaluating
-            if (!hasPayerEvidence || !hasReceiverEvidence) continue;
-
-            console.log(`[auto-eval] Both parties submitted evidence for ${disputeKey.slice(0, 20)}... — evaluating`);
             evaluatedDisputes.add(disputeKey);
-
-            try {
-              const result = await evaluateDispute(paymentInfo, nonce);
-              console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
-              console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
-              console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
-              if (result.refundTx) {
-                console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
-              }
-            } catch (err) {
-              const errMsg = String(err);
-              console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
-              // Only retry on transient errors; updateStatus reverts and payload errors are permanent
-              const isPermanent = errMsg.includes("updateStatus") || errMsg.includes("revert") || errMsg.includes("413");
-              if (isPermanent) {
-                console.log(`[auto-eval] Permanent failure — marking ${disputeKey.slice(0, 20)}... as evaluated`);
-              } else {
-                evaluatedDisputes.delete(disputeKey);
-              }
+          } catch (err) {
+            const errMsg = String(err);
+            console.error(`[auto-eval] Recovery failed for ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
+            if (errMsg.includes("429") || errMsg.includes("rate")) {
+              await sleep(10_000);
+              break;
             }
+            // Mark as permanently failed — don't retry
+            evaluatedDisputes.add(disputeKey);
+          }
+          continue;
+        }
+
+        // Require both payer and merchant evidence before evaluating
+        if (!hasPayerEvidence || !hasReceiverEvidence) continue;
+
+        console.log(`[auto-eval] Both parties submitted evidence for ${disputeKey.slice(0, 20)}... — evaluating`);
+        evaluatedDisputes.add(disputeKey);
+
+        try {
+          const result = await evaluateDispute(paymentInfo, nonce);
+          console.log(`[auto-eval] Decision: ${result.decision} (confidence: ${result.confidence})`);
+          console.log(`[auto-eval] Evidence tx: ${result.evidenceSubmitTx}`);
+          console.log(`[auto-eval] Decision tx: ${result.decisionTx}`);
+          if (result.refundTx) {
+            console.log(`[auto-eval] Refund tx: ${result.refundTx}`);
           }
         } catch (err) {
-          console.error("[auto-eval] Poll error:", err);
+          const errMsg = String(err);
+          console.error(`[auto-eval] Failed to evaluate ${disputeKey.slice(0, 20)}...:`, errMsg.slice(0, 200));
+          // Only retry on transient errors; updateStatus reverts and payload errors are permanent
+          const isPermanent = errMsg.includes("updateStatus") || errMsg.includes("revert") || errMsg.includes("413");
+          if (isPermanent) {
+            console.log(`[auto-eval] Permanent failure — marking ${disputeKey.slice(0, 20)}... as evaluated`);
+          } else {
+            evaluatedDisputes.delete(disputeKey);
+          }
         }
-      }, AUTO_EVAL_POLL_MS);
-    }, INDEX_INTERVAL_MS / 2); // start auto-eval 15s after boot, staggered from index poller
-  }
+      }
+    } catch (err) {
+      console.error("[auto-eval] Poll error:", err);
+    }
+  }, AUTO_EVAL_POLL_MS);
 }
 
 start();

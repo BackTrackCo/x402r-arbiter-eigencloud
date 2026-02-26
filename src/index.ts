@@ -83,7 +83,7 @@ const EIGENAI_GRANT_SERVER =
 const EIGENAI_MODEL = process.env.EIGENAI_MODEL ?? "gpt-oss-120b-f16";
 const EIGENAI_SEED = parseInt(process.env.EIGENAI_SEED ?? "42", 10);
 const CONFIDENCE_THRESHOLD = parseFloat(
-  process.env.CONFIDENCE_THRESHOLD ?? "0.7",
+  process.env.CONFIDENCE_THRESHOLD ?? "0.5",
 );
 const ESCROW_PERIOD_SECONDS = BigInt(
   process.env.ESCROW_PERIOD_SECONDS ?? "604800",

@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
-import { createWalletClient, http, type Chain } from "viem";
+import { type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base, sepolia } from "viem/chains";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
@@ -11,14 +11,15 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 dotenv.config();
 
 const PRIVATE_KEY = process.env.MERCHANT_PRIVATE_KEY ?? process.env.PRIVATE_KEY;
+const MERCHANT_ADDRESS = process.env.MERCHANT_ADDRESS as `0x${string}` | undefined;
 const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
   "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0") as `0x${string}`;
 const FACILITATOR_URL = process.env.FACILITATOR_URL;
 const CHAIN_ID = parseInt(process.env.CHAIN_ID ?? "84532", 10);
-const MERCHANT_PORT = parseInt(process.env.MERCHANT_PORT ?? "4021", 10);
+const MERCHANT_PORT = parseInt(process.env.PORT ?? process.env.MERCHANT_PORT ?? "4021", 10);
 
-if (!PRIVATE_KEY) {
-  console.error("MERCHANT_PRIVATE_KEY or PRIVATE_KEY is required");
+if (!MERCHANT_ADDRESS && !PRIVATE_KEY) {
+  console.error("MERCHANT_ADDRESS or MERCHANT_PRIVATE_KEY or PRIVATE_KEY is required");
   process.exit(1);
 }
 if (!FACILITATOR_URL) {
@@ -38,7 +39,7 @@ if (!chain) {
 }
 
 const networkId = `eip155:${CHAIN_ID}` as const;
-const account = privateKeyToAccount(PRIVATE_KEY as `0x${string}`);
+const payTo = MERCHANT_ADDRESS ?? privateKeyToAccount(PRIVATE_KEY as `0x${string}`).address;
 const facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
 
 const app = express();
@@ -53,7 +54,7 @@ app.use(
               scheme: "escrow",
               price: "$0.01",
               network: networkId,
-              payTo: account.address,
+              payTo,
             },
             OPERATOR_ADDRESS,
           ),
@@ -82,7 +83,7 @@ app.listen(MERCHANT_PORT, () => {
   console.log(
     `x402r Merchant Server listening at http://localhost:${MERCHANT_PORT}`,
   );
-  console.log(`  Merchant address: ${account.address}`);
+  console.log(`  Merchant address: ${payTo}`);
   console.log(`  Operator: ${OPERATOR_ADDRESS}`);
   console.log(`  Network: ${networkId}`);
   console.log(`  Facilitator: ${FACILITATOR_URL}`);

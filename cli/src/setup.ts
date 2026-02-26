@@ -61,7 +61,8 @@ export async function initCli(): Promise<CliSetup> {
     process.exit(1);
   }
 
-  const transport = http(config.rpcUrl);
+  const rpcUrl = config.rpcUrl?.startsWith("http") ? config.rpcUrl : undefined;
+  const transport = http(rpcUrl);
 
   const publicClient = createPublicClient({ chain, transport });
   const walletClient = createWalletClient({ account, chain, transport });
@@ -92,7 +93,8 @@ export async function initReadOnly(): Promise<Pick<CliSetup, "publicClient" | "n
     process.exit(1);
   }
 
-  const publicClient = createPublicClient({ chain, transport: http(config.rpcUrl) });
+  const rpcUrl = config.rpcUrl?.startsWith("http") ? config.rpcUrl : undefined;
+  const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
 
   return {
     publicClient,

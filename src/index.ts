@@ -701,11 +701,12 @@ async function start() {
   // 4b. If operator not deployed, poll balance and retry
   if (!OPERATOR_ADDRESS) {
     const RETRY_INTERVAL_MS = 30_000;
+    let lastFailedBalance = 0n;
     console.log(`  Checking balance every ${RETRY_INTERVAL_MS / 1000}s for operator deployment...`);
     const retryTimer = setInterval(async () => {
       try {
         const balance = await publicClient.getBalance({ address: account.address });
-        if (balance === 0n) return;
+        if (balance === 0n || balance === lastFailedBalance) return;
         console.log(`  Balance detected (${balance} wei) — attempting operator deployment...`);
         OPERATOR_ADDRESS = await autoDeployOperator();
         clearInterval(retryTimer);
@@ -714,12 +715,13 @@ async function start() {
         setInterval(() => {
           indexAndCachePaymentInfo().catch(() => {});
         }, INDEX_INTERVAL_MS);
-        // Start auto-eval poller (staggered)
         setTimeout(() => {
           startAutoEvalPoller();
         }, INDEX_INTERVAL_MS / 2);
       } catch (err) {
-        console.warn("  Operator deploy retry failed:", err instanceof Error ? err.message : err);
+        const balance = await publicClient.getBalance({ address: account.address }).catch(() => 0n);
+        lastFailedBalance = balance;
+        console.warn(`  Operator deploy retry failed (balance: ${balance} wei):`, err instanceof Error ? err.message : err);
       }
     }, RETRY_INTERVAL_MS);
   }

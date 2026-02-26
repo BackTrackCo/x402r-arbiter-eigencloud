@@ -13,8 +13,8 @@
  *   Phase 4: Wait for auto-evaluation (merchant bot + arbiter)
  *
  * Prerequisites:
- *   - Ethereum Sepolia ETH (~0.001 for gas)
- *   - Ethereum Sepolia USDC (0.01 USDC = 10000 units)
+ *   - Base Sepolia ETH (~0.001 for gas)
+ *   - Base Sepolia USDC (0.01 USDC = 10000 units)
  *   - CLI packages available (pnpm install in x402r-arbiter-eigencloud)
  *
  * Usage:
@@ -32,8 +32,9 @@ import {
   formatUnits,
   erc20Abi,
   type Address,
+  type Chain,
 } from "viem";
-import { sepolia } from "viem/chains";
+import { baseSepolia, base, sepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402Client } from "@x402/core/client";
 import { x402HTTPClient } from "@x402/core/http";
@@ -62,18 +63,42 @@ if (!PRIVATE_KEY) {
   process.exit(1);
 }
 
+const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:84532";
+const CHAIN_ID = parseInt(NETWORK_ID.split(":")[1], 10);
+
+const CHAINS: Record<number, Chain> = {
+  84532: baseSepolia,
+  8453: base,
+  11155111: sepolia,
+};
+const chain = CHAINS[CHAIN_ID];
+if (!chain) {
+  console.error(`Unsupported chain in NETWORK_ID: ${NETWORK_ID}`);
+  process.exit(1);
+}
+
+const USDC_ADDRESSES: Record<number, Address> = {
+  84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  11155111: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+};
+const USDC_ADDRESS = USDC_ADDRESSES[CHAIN_ID]!;
+
+const SCANNERS: Record<number, string> = {
+  84532: "https://sepolia.basescan.org",
+  8453: "https://basescan.org",
+  11155111: "https://sepolia.etherscan.io",
+};
+const SCANNER = SCANNERS[CHAIN_ID]!;
+
 const MERCHANT_URL =
   process.env.MERCHANT_URL ??
   "https://x402r-test-merchant-production.up.railway.app/weather";
 const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
-  "0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0") as Address;
-const NETWORK_ID = process.env.NETWORK_ID ?? "eip155:11155111";
+  "0xF5C1712736D3B8f34F245430edF9dF0aAd00D5B0") as Address;
 const ARBITER_URL =
   process.env.ARBITER_URL ?? "http://34.27.80.151:3000";
-const RPC_URL = process.env.RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com";
-const USDC_ADDRESS = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as Address;
-
-const SCANNER = "https://sepolia.etherscan.io";
+const RPC_URL = process.env.RPC_URL;
 
 // How long to wait for merchant bot + arbiter auto-eval (ms)
 const AUTO_EVAL_TIMEOUT_MS = 120_000;
@@ -154,12 +179,12 @@ async function main() {
 
   const account = privateKeyToAccount(PRIVATE_KEY);
   const publicClient = createPublicClient({
-    chain: sepolia,
+    chain,
     transport: http(RPC_URL),
   });
   const walletClient = createWalletClient({
     account,
-    chain: sepolia,
+    chain,
     transport: http(RPC_URL),
   });
 
@@ -277,7 +302,7 @@ async function main() {
   );
   const addresses = resolveAddresses(NETWORK_ID);
   const paymentHash = computePaymentInfoHash(
-    11155111,
+    CHAIN_ID,
     addresses.escrowAddress as `0x${string}`,
     paymentInfo,
   );
@@ -432,7 +457,7 @@ async function main() {
     escrowAddress: addresses.escrowAddress,
     refundRequestAddress: addresses.refundRequestAddress,
     refundRequestEvidenceAddress: addresses.evidenceAddress,
-    chainId: 11155111,
+    chainId: CHAIN_ID,
   });
 
   const startWait = Date.now();

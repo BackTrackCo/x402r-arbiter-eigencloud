@@ -120,7 +120,10 @@ export default function GuidePage() {
         </h2>
         <div className="border border-border p-4 space-y-4 text-xs">
           <p className="text-muted-foreground mb-2">
-            All endpoints are relative to the arbiter base URL.
+            All endpoints are relative to the arbiter base URL. The{" "}
+            <span className="text-foreground">/arbiter</span> path on this
+            dashboard is a convenience proxy — in production the arbiter and
+            frontend are separate, independent services.
           </p>
 
           <Endpoint method="GET" path="/health" desc="Status, model, threshold, network info" />

@@ -131,11 +131,6 @@ export default function GuidePage() {
 
           <Endpoint method="GET" path="/api/policy" desc="Evaluation policy (system prompt hash, model, threshold)" />
 
-          <Endpoint method="POST" path="/api/pin" desc="Pin evidence JSON to IPFS (no auth needed)" />
-          <Code>{`curl -X POST ${arbiterUrl}/api/pin \\
-  -H "Content-Type: application/json" \\
-  -d '{"type":"client-evidence","message":"Data was incorrect"}'`}</Code>
-
           <Endpoint method="POST" path="/api/payment-info" desc="Cache payment info for dashboard lookups" />
 
           <Endpoint method="GET" path="/api/payment-info/:hash" desc="Retrieve cached payment info by hash" />
@@ -146,8 +141,6 @@ export default function GuidePage() {
           <Code>{`curl "${arbiterUrl}/api/disputes?offset=0&count=5"`}</Code>
 
           <Endpoint method="GET" path="/api/dispute/:compositeKey" desc="Dispute detail (status, amount, nonce)" />
-
-          <Endpoint method="POST" path="/api/verify" desc="Replay AI evaluation, verify commitment hash" />
         </div>
       </section>
 

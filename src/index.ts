@@ -307,26 +307,6 @@ app.get("/api/contracts", (_req, res) => {
   });
 });
 
-// --- Pin evidence to IPFS (so clients don't need their own Pinata key) ---
-app.post("/api/pin", async (req, res) => {
-  try {
-    const data = req.body;
-    if (!data || typeof data !== "object") {
-      res.status(400).json({ error: "JSON body required" });
-      return;
-    }
-    if (!PINATA_JWT) {
-      res.status(503).json({ error: "Pinata not configured on this arbiter" });
-      return;
-    }
-    const cid = await pinToIpfs(data, "client-evidence");
-    res.json({ cid });
-  } catch (err) {
-    console.error("Pin error:", err);
-    res.status(500).json({ error: String(err) });
-  }
-});
-
 // --- Policy endpoint ---
 app.get("/api/policy", (_req, res) => {
   res.json({
@@ -568,84 +548,6 @@ app.get("/api/dispute/:compositeKey", async (req, res) => {
     });
   } catch (err) {
     console.error("Get dispute error:", err);
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-// --- Verify commitment (replay) ---
-app.post("/api/verify", async (req, res) => {
-  try {
-    const { paymentInfo: paymentInfoRaw, nonce } = req.body;
-    if (!paymentInfoRaw || nonce === undefined) {
-      res.status(400).json({ error: "paymentInfo and nonce are required" });
-      return;
-    }
-
-    const paymentInfo: PaymentInfo = parsePaymentInfo(paymentInfoRaw);
-    const nonceBI = BigInt(nonce);
-
-    // Separate arbiter evidence (to extract seed) from party evidence (for prompt)
-    // Only consider first evidence per role to match evaluate behavior
-    const rawEvidence = await arbiter.getAllEvidence(paymentInfo, nonceBI);
-    const deduped = firstEvidencePerRole(rawEvidence);
-    const arbiterEvidence = deduped.filter((e) => e.role === 2);
-    const evidence = deduped.filter((e) => e.role !== 2);
-
-    // Extract seed from the arbiter's on-chain evidence (may be IPFS CID or inline JSON)
-    let seed = EIGENAI_SEED; // fallback to global default
-    for (const entry of arbiterEvidence) {
-      try {
-        const content = await resolveEvidenceContent(entry.cid);
-        const parsed = typeof content === "string" ? JSON.parse(content) : content;
-        if (parsed.commitment?.seed !== undefined) {
-          seed = parsed.commitment.seed;
-          break;
-        }
-        if (parsed.seed !== undefined) {
-          seed = parsed.seed;
-          break;
-        }
-      } catch {
-        // Failed to resolve — skip
-      }
-    }
-
-    const evidenceContent = new Map<string, string>();
-    for (const entry of evidence) {
-      try {
-        const content = await resolveEvidenceContent(entry.cid);
-        evidenceContent.set(
-          entry.cid,
-          typeof content === "string" ? content : JSON.stringify(content),
-        );
-      } catch {
-        evidenceContent.set(entry.cid, "(failed to retrieve)");
-      }
-    }
-
-    const userPrompt = buildPrompt(evidence, evidenceContent);
-
-    // Replay EigenAI evaluation with the same seed from the original ruling
-    const aiResult = await eigenai.evaluate(
-      SYSTEM_PROMPT,
-      userPrompt,
-      seed,
-    );
-
-    // Recompute commitment (must use displayContent to match evaluate endpoint)
-    const replayCommitment = createCommitment(
-      userPrompt,
-      seed,
-      aiResult.displayContent,
-    );
-
-    res.json({
-      replayCommitment,
-      displayContent: aiResult.displayContent,
-      note: "Compare commitmentHash with the on-chain evidence CID to verify determinism",
-    });
-  } catch (err) {
-    console.error("Verify error:", err);
     res.status(500).json({ error: String(err) });
   }
 });

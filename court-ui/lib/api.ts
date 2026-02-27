@@ -97,11 +97,25 @@ export async function verifyDispute(
   paymentInfo: Record<string, unknown>,
   nonce: string,
 ): Promise<VerifyResponse> {
-  const res = await fetchWithRetry(`${ARBITER_URL}/api/verify`, {
+  // Call court-ui's own /api/verify route — independent of the arbiter
+  const res = await fetchWithRetry("/api/verify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paymentInfo, nonce }),
   });
   if (!res.ok) throw new Error(`Verification failed: ${res.status}`);
+  return res.json();
+}
+
+export async function pinEvidence(
+  data: Record<string, unknown>,
+): Promise<{ cid: string }> {
+  // Pin via court-ui's own /api/pin route — independent of the arbiter
+  const res = await fetchWithRetry("/api/pin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Pin failed: ${res.status}`);
   return res.json();
 }

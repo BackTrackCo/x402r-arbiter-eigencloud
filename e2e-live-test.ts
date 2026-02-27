@@ -97,7 +97,7 @@ const MERCHANT_URL =
 const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
   "0xF5C1712736D3B8f34F245430edF9dF0aAd00D5B0") as Address;
 const ARBITER_URL =
-  process.env.ARBITER_URL ?? "http://136.118.108.207:3000";
+  process.env.ARBITER_URL ?? "http://34.145.75.41:3000";
 const RPC_URL = process.env.RPC_URL;
 
 // How long to wait for merchant bot + arbiter auto-eval (ms)

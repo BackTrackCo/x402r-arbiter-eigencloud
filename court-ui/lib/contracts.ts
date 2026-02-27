@@ -2,7 +2,11 @@ import { createPublicClient, http, type Address, type PublicClient } from "viem"
 import { baseSepolia, sepolia } from "viem/chains";
 import type { Chain } from "viem";
 
-const ARBITER_URL = process.env.NEXT_PUBLIC_ARBITER_URL || "/arbiter";
+// Server-side (API routes) needs an absolute URL; browser can use the /arbiter proxy
+const ARBITER_URL =
+  process.env.ARBITER_BACKEND_URL ||
+  process.env.NEXT_PUBLIC_ARBITER_URL ||
+  "/arbiter";
 
 // Chain lookup
 const CHAINS: Record<number, Chain> = {

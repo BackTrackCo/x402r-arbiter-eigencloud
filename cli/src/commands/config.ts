@@ -12,6 +12,7 @@ export function registerConfigCommand(program: Command): void {
     .option("-k, --key <privateKey>", "Set private key")
     .option("-o, --operator <address>", "Set operator address")
     .option("-a, --arbiter-url <url>", "Set arbiter server URL")
+    .option("-c, --court-url <url>", "Set court UI URL (for independent verification)")
     .option("-n, --network <networkId>", "Set network ID (e.g., eip155:84532)")
     .option("-r, --rpc <url>", "Set RPC URL")
     .option("--pinata-jwt <jwt>", "Set Pinata JWT token")
@@ -29,6 +30,10 @@ export function registerConfigCommand(program: Command): void {
       }
       if (options.arbiterUrl) {
         updates.arbiterUrl = options.arbiterUrl;
+        hasUpdates = true;
+      }
+      if (options.courtUrl) {
+        updates.courtUrl = options.courtUrl;
         hasUpdates = true;
       }
       if (options.network) {

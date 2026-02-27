@@ -11,6 +11,7 @@ export interface CliConfigFile {
   privateKey?: string;
   operatorAddress?: string;
   arbiterUrl?: string;
+  courtUrl?: string;
   networkId?: string;
   rpcUrl?: string;
   pinataJwt?: string;
@@ -87,6 +88,7 @@ export function getConfig(): Required<Pick<CliConfigFile, "networkId" | "arbiter
     privateKey: process.env.PRIVATE_KEY || file.privateKey,
     operatorAddress: process.env.OPERATOR_ADDRESS || file.operatorAddress,
     arbiterUrl: process.env.ARBITER_URL || file.arbiterUrl || "http://localhost:3000",
+    courtUrl: process.env.COURT_URL || file.courtUrl,
     networkId: process.env.NETWORK_ID || file.networkId || "eip155:11155111",
     rpcUrl: process.env.RPC_URL || file.rpcUrl,
     pinataJwt: process.env.PINATA_JWT || file.pinataJwt,
@@ -130,6 +132,7 @@ export async function printConfig(): Promise<void> {
   console.log("  Private Key:", config.privateKey ? `${config.privateKey.slice(0, 6)}...${config.privateKey.slice(-4)}` : "(not set)");
   console.log("  Operator:", config.operatorAddress || "(not set)");
   console.log("  Arbiter URL:", config.arbiterUrl);
+  console.log("  Court URL:", config.courtUrl || "(not set)");
   console.log("  Network:", config.networkId);
   console.log("  RPC URL:", config.rpcUrl || "(chain default)");
   console.log("  Pinata JWT:", config.pinataJwt ? `${config.pinataJwt.slice(0, 12)}...` : "(not set)");

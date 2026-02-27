@@ -1,20 +1,17 @@
 /**
- * IPFS pinning — tries Pinata JWT first, then arbiter's /api/pin endpoint,
- * then falls back to a pre-pinned placeholder CID.
+ * IPFS pinning — uses Pinata JWT, falls back to placeholder CID.
  */
 
 import { getConfig } from "./config.js";
 
 /**
  * Pin JSON to IPFS.
- * 1. Pinata JWT (if configured)
- * 2. Arbiter /api/pin endpoint (free for clients)
- * 3. Placeholder CID fallback
+ * 1. Pinata JWT (required for production use)
+ * 2. Placeholder CID fallback (dev/testing only)
  */
 export async function pinToIpfs(data: Record<string, unknown>): Promise<string> {
   const config = getConfig();
 
-  // 1. Direct Pinata
   if (config.pinataJwt) {
     console.log("  Pinning to IPFS via Pinata...");
     try {
@@ -40,27 +37,7 @@ export async function pinToIpfs(data: Record<string, unknown>): Promise<string> 
     }
   }
 
-  // 2. Arbiter pin endpoint
-  const arbiterUrl = config.arbiterUrl;
-  console.log(`  Pinning via arbiter (${arbiterUrl}/api/pin)...`);
-  try {
-    const response = await fetch(`${arbiterUrl}/api/pin`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (response.ok) {
-      const result = (await response.json()) as { cid: string };
-      console.log(`  Pinned: ${result.cid}`);
-      return result.cid;
-    }
-    const text = await response.text();
-    console.warn(`  Arbiter pin failed (${response.status}): ${text}`);
-  } catch (err) {
-    console.warn(`  Arbiter pin error:`, err instanceof Error ? err.message : err);
-  }
-
-  // 3. Placeholder fallback
-  console.log("  (Using placeholder CID)");
+  // Placeholder fallback
+  console.log("  (Using placeholder CID — set pinataJwt in config for production)");
   return "QmXyxi3LYRb33bThaHLtotFxcG4FXnDowC2d5EjwYqE4iR";
 }

@@ -1,5 +1,5 @@
 /**
- * verify command — Replay arbiter evaluation and verify commitment hashes
+ * verify command — Replay arbiter evaluation via court-ui's independent verifier
  */
 
 import type { Command } from "commander";
@@ -10,20 +10,28 @@ import { getConfig } from "../config.js";
 export function registerVerifyCommand(program: Command): void {
   program
     .command("verify")
-    .description("Verify arbiter ruling by replaying AI evaluation")
+    .description("Verify arbiter ruling by replaying AI evaluation (via court-ui)")
     .option("-p, --payment-json <json>", "Payment info JSON (uses saved state if omitted)")
     .option("-n, --nonce <nonce>", "Nonce")
+    .option("-c, --court-url <url>", "Court UI URL (overrides config)")
     .action(async (options) => {
       const config = getConfig();
-      const { arbiterUrl } = await initReadOnly();
+      await initReadOnly();
       const paymentInfo = getPaymentInfo(options);
       const nonce = getNonce(options);
 
-      const url = config.arbiterUrl || arbiterUrl;
-      console.log(`\nVerifying dispute via ${url}...`);
+      const courtUrl = options.courtUrl || config.courtUrl;
+      if (!courtUrl) {
+        console.error("\nError: Court UI URL not configured.");
+        console.error("Set it with: x402r config --court-url https://your-court-ui.vercel.app");
+        console.error("Or pass it directly: x402r verify --court-url https://...");
+        process.exit(1);
+      }
+
+      console.log(`\nVerifying dispute via ${courtUrl}...`);
 
       try {
-        const response = await fetch(`${url}/api/verify`, {
+        const response = await fetch(`${courtUrl}/api/verify`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -36,7 +44,7 @@ export function registerVerifyCommand(program: Command): void {
 
         if (!response.ok) {
           const error = await response.text();
-          console.error(`\nArbiter returned ${response.status}:`, error);
+          console.error(`\nCourt UI returned ${response.status}:`, error);
           process.exit(1);
         }
 
@@ -47,15 +55,24 @@ export function registerVerifyCommand(program: Command): void {
             responseHash: string;
             seed: number;
           };
+          originalCommitment?: {
+            commitmentHash: string;
+          };
           displayContent: string;
           note: string;
         };
 
         console.log("\n=== Verification Result ===");
-        console.log("\n  Commitment Hash:", data.replayCommitment.commitmentHash);
+        console.log("\n  Replay Commitment:", data.replayCommitment.commitmentHash);
         console.log("  Prompt Hash:", data.replayCommitment.promptHash);
         console.log("  Response Hash:", data.replayCommitment.responseHash);
         console.log("  Seed:", data.replayCommitment.seed);
+
+        if (data.originalCommitment) {
+          const match = data.replayCommitment.commitmentHash === data.originalCommitment.commitmentHash;
+          console.log("\n  Original Commitment:", data.originalCommitment.commitmentHash);
+          console.log(`  Match: ${match ? "MATCH" : "MISMATCH"}`);
+        }
 
         // Try to parse the AI response
         try {
@@ -71,7 +88,7 @@ export function registerVerifyCommand(program: Command): void {
         console.log("\n  Note:", data.note);
       } catch (error) {
         console.error("\nFailed to verify:", error instanceof Error ? error.message : error);
-        console.error("Is the arbiter server running at", url, "?");
+        console.error("Is the court UI running at", courtUrl, "?");
         process.exit(1);
       }
     });

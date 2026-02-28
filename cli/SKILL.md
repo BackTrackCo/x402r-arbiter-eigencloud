@@ -10,193 +10,79 @@ tags: [x402r, payments, disputes, web3, arbitration]
 
 You help users make escrow payments and file payment disputes on the x402r protocol. The x402r protocol adds refundable payments to HTTP 402 — buyers can request refunds through on-chain arbitration.
 
-## Installation
-
-The CLI is available via npx (no install needed):
-
-```bash
-npx --yes @x402r/cli <command>
-```
-
-Or install globally:
-
-```bash
-npm install -g @x402r/cli
-```
-
-> **Note:** If running inside a pnpm workspace, `npx` may fail due to workspace resolution. Use `npm install -g @x402r/cli` or run from an external directory instead.
-
-## First-Time Setup
-
-Before using any commands, configure the CLI with the user's wallet:
+## Setup
 
 ```bash
 npx --yes @x402r/cli config --key <private-key> --arbiter-url https://www.moltarbiter.fun/arbiter
 ```
 
-- `--key`: The user's Ethereum private key (0x-prefixed). Stored in `~/.x402r/config.json`.
-- `--arbiter-url`: URL of the arbiter server. The public arbiter is at `https://www.moltarbiter.fun/arbiter`.
-- `--operator`: The PaymentOperator contract address (auto-discovered from arbiter if omitted).
-- `--network`: Network ID in EIP-155 format (auto-discovered from arbiter, default: `eip155:84532` for Base Sepolia).
-- `--rpc`: Custom RPC URL (optional, auto-discovered from arbiter).
+Operator, network, and RPC are auto-discovered from the arbiter. The wallet needs Base Sepolia ETH (gas) and USDC (payments).
 
-### Quick Start (Base Sepolia)
-
-```bash
-npx --yes @x402r/cli config --key <private-key> --arbiter-url https://www.moltarbiter.fun/arbiter
-```
-
-The operator address and network are auto-discovered from the arbiter. The test merchant endpoint is `https://fantastic-optimism-production-602a.up.railway.app/weather`. You can verify it returns a 402:
-
-```bash
-curl -s -o /dev/null -w "%{http_code}" https://fantastic-optimism-production-602a.up.railway.app/weather
-```
-
-Your wallet needs Base Sepolia ETH and USDC:
-- ETH faucet: https://www.alchemy.com/faucets/base-sepolia
-- USDC faucet: https://faucet.circle.com/ (select Base Sepolia)
-
-To view current config:
-
-```bash
-npx --yes @x402r/cli config
-```
+Test merchant: `https://fantastic-optimism-production-602a.up.railway.app/weather`
 
 ## Commands
 
-### Pay a Merchant
-
-Makes an escrow payment to a merchant's x402-protected endpoint:
+### pay
 
 ```bash
-npx --yes @x402r/cli pay https://fantastic-optimism-production-602a.up.railway.app/weather
+npx --yes @x402r/cli pay <url>
+npx --yes @x402r/cli pay <url> --output response.json
 ```
 
-The command handles the full x402 payment flow:
-1. `GET <url>` — receives 402 with payment requirements
-2. Signs an escrow authorization locally
-3. Retries with the payment header — merchant's facilitator verifies and settles
-4. Saves payment info to `~/.x402r/last-payment.json` for later dispute
-5. Prints the response body
+Makes an escrow payment. Saves payment info to `~/.x402r/last-payment.json` for later dispute.
 
-Options:
-- `-o, --output <path>`: Save response body to a file
-
-### File a Dispute
-
-Creates an on-chain refund request and submits evidence in one step:
+### dispute
 
 ```bash
-npx --yes @x402r/cli dispute "Service was not delivered as promised" --evidence "Paid for API access but received 503 errors for 3 hours"
+npx --yes @x402r/cli dispute "reason" --evidence "details"
 ```
 
-Options:
-- First argument (required): The reason for the dispute
-- `-e, --evidence <text>`: Additional evidence text
-- `-f, --file <path>`: Path to a JSON file with structured evidence
-- `-p, --payment-json <json>`: Payment info JSON (uses saved state from last payment if omitted)
-- `-n, --nonce <nonce>`: Nonce for the refund request (default: 0)
-- `-a, --amount <amount>`: Refund amount in token units (default: full payment amount)
+Creates on-chain refund request + submits evidence in one step. Uses saved payment info from `pay`. Prints a dashboard link.
 
-The command saves dispute state to `~/.x402r/last-dispute.json` and prints a dashboard link where you can track the dispute.
+Options: `-e/--evidence <text>`, `-f/--file <path>`, `-p/--payment-json <json>`, `-n/--nonce <n>`, `-a/--amount <n>`
 
-### Check Dispute Status
+### status
 
 ```bash
 npx --yes @x402r/cli status
 ```
 
-Options:
-- `--id <compositeKey>`: Look up by composite key
-- `-p, --payment-json <json>`: Payment info JSON
-- `-n, --nonce <nonce>`: Nonce
+Check dispute status. Tries arbiter API first, falls back to on-chain. Options: `--id <compositeKey>`, `-p/--payment-json`, `-n/--nonce`
 
-Tries the arbiter server first, falls back to on-chain query. Returns: Pending, Approved, Denied, Cancelled, or "No refund request found" if no dispute exists.
-
-### List Disputes
-
-```bash
-npx --yes @x402r/cli list
-```
-
-Options:
-- `-r, --receiver <address>`: Filter by receiver address
-- `--offset <n>`: Pagination offset (default: 0)
-- `--count <n>`: Number of results (default: 20)
-
-Lists disputes from the arbiter server with pagination.
-
-### View Evidence
+### show
 
 ```bash
 npx --yes @x402r/cli show
 ```
 
-Shows all evidence entries (payer, merchant, arbiter) for a dispute. Each entry shows: role, submitter address, timestamp, and evidence content. If Pinata is configured, the content field is an IPFS CID; otherwise, it contains the raw evidence JSON inline.
+Show all evidence (payer, merchant, arbiter) for a dispute. Options: `-p/--payment-json`, `-n/--nonce`
 
-Options:
-- `-p, --payment-json <json>`: Payment info JSON
-- `-n, --nonce <nonce>`: Nonce
-
-### Verify Arbiter Ruling
+### verify
 
 ```bash
 npx --yes @x402r/cli verify
 ```
 
-Replays the arbiter's AI evaluation to verify the commitment hash matches. Shows:
-- Commitment hash, prompt hash, response hash, seed
-- The AI's decision, confidence, and reasoning
+Replay the arbiter's AI evaluation to verify the commitment hash is deterministic. Options: `-p/--payment-json`, `-n/--nonce`
 
-Options:
-- `-p, --payment-json <json>`: Payment info JSON
-- `-n, --nonce <nonce>`: Nonce
-
-## Payment JSON Format
-
-When using `--payment-json` to specify payment info directly (instead of relying on saved state), provide a JSON string with these fields:
-
-```json
-{
-  "operator": "0x...",
-  "payer": "0x...",
-  "receiver": "0x...",
-  "token": "0x...",
-  "maxAmount": "10000",
-  "preApprovalExpiry": "0",
-  "authorizationExpiry": "1700000000",
-  "refundExpiry": "1700100000"
-}
-```
-
-All address fields are 0x-prefixed Ethereum addresses. Amount and timestamp fields are numeric strings. `maxAmount` is in the token's smallest unit (e.g., 10000 = 0.01 USDC with 6 decimals).
-
-Example with a full command:
+### list
 
 ```bash
-npx --yes @x402r/cli status --payment-json '{"operator":"0x<operator>","payer":"0x<payer>","receiver":"0x<receiver>","token":"0x<token>","maxAmount":"10000","preApprovalExpiry":"0","authorizationExpiry":"1700000000","refundExpiry":"1700100000"}' --nonce 0
+npx --yes @x402r/cli list
 ```
+
+List disputes from the arbiter. Options: `-r/--receiver <addr>`, `--offset <n>`, `--count <n>`
 
 ## Typical Workflow
 
-1. `npx --yes @x402r/cli pay <merchant-url>` — makes an escrow payment and saves payment info
-2. `npx --yes @x402r/cli dispute "reason" --evidence "details"` — files a dispute (uses saved payment info)
-3. `npx --yes @x402r/cli status` — checks if the arbiter has ruled
-4. `npx --yes @x402r/cli show` — views all evidence from both parties and the arbiter
-5. `npx --yes @x402r/cli verify` — verifies the AI ruling was deterministic
+1. `npx --yes @x402r/cli pay <merchant-url>` — escrow payment, saves state
+2. `npx --yes @x402r/cli dispute "reason" --evidence "details"` — files dispute
+3. `npx --yes @x402r/cli status` — check arbiter ruling
+4. `npx --yes @x402r/cli show` — view evidence from all parties
+5. `npx --yes @x402r/cli verify` — verify ruling was deterministic
 
-## Important Notes
+## Notes
 
-- The CLI saves state between commands. After `pay`, the payment info is saved for `dispute`. After `dispute`, you can run `status`, `show`, `verify` without re-specifying payment info.
-- If no saved state exists, you must provide `--payment-json` and `--nonce` explicitly.
-- Evidence can be stored on IPFS (if Pinata keys are configured via `--pinata-jwt` on `config`) or inline as JSON strings.
-- The `verify` command requires the arbiter server to be running — it replays the AI evaluation server-side.
-- All on-chain operations require ETH for gas on the configured network.
-
-## Troubleshooting
-
-- **"fetch failed" / arbiter unreachable**: The arbiter server may be down. Commands like `list` require the server; `status` and `show` fall back to on-chain queries automatically.
-- **"No payment state found"**: Run `pay` first to create saved state, or pass `--payment-json` directly.
-- **Transaction reverts / insufficient gas**: Ensure the configured wallet has ETH on the target network for gas fees.
-- **`verify` fails with "fetch failed"**: The `verify` command requires the arbiter server to be running. Unlike `status` and `show`, it has no on-chain fallback — it replays the AI evaluation server-side.
-- **npx not found inside workspace**: If running in a pnpm monorepo, install globally with `npm install -g @x402r/cli` instead.
+- State chains between commands: `pay` saves for `dispute`, `dispute` saves for `status`/`show`/`verify`.
+- Without saved state, pass `--payment-json` and `--nonce` explicitly.
+- `verify` requires the arbiter server — no on-chain fallback.

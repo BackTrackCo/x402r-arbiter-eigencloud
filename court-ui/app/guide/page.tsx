@@ -1,7 +1,7 @@
 import { Separator } from "@/components/ui/separator";
 import { LiveConfig } from "./live-config";
 
-const MERCHANT_URL = "https://x402r-test-merchant-production.up.railway.app";
+const MERCHANT_URL = "https://fantastic-optimism-production-602a.up.railway.app";
 const ARBITER_URL = "https://www.moltarbiter.fun/arbiter";
 
 export default function GuidePage() {

@@ -1,15 +1,15 @@
 /**
- * E2E Live Test: Full Dispute Flow Against Live Services
+ * E2E Live Test: Full Pay → Dispute Flow Against Live Services
  *
- * Tests the x402r CLI tools against real deployed services:
- *   - Railway merchant server (x402r-test-merchant)
- *   - Ultravioleta facilitator (x402 mainline)
+ * Tests the x402r CLI commands end-to-end against real deployed services:
+ *   - Railway merchant server (or local via MERCHANT_URL)
+ *   - Facilitator (Ultravioleta or local)
  *   - EigenCloud arbiter (auto-evaluates disputes)
  *
  * Flow:
  *   Phase 1: Setup wallet, check balances
- *   Phase 2: HTTP 402 payment against live merchant
- *   Phase 3: CLI dispute, status, show
+ *   Phase 2: `x402r pay` against merchant (tests the new pay command)
+ *   Phase 3: CLI dispute (verify compositeKey + dashboard link), status, show
  *   Phase 4: Wait for auto-evaluation (merchant bot + arbiter)
  *
  * Prerequisites:
@@ -19,6 +19,7 @@
  *
  * Usage:
  *   PRIVATE_KEY=0x... pnpm e2e:live
+ *   PRIVATE_KEY=0x... MERCHANT_URL=http://localhost:4021/weather pnpm e2e:live
  */
 
 import { execSync } from "child_process";
@@ -36,19 +37,12 @@ import {
 } from "viem";
 import { baseSepolia, base, sepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
-import { x402Client } from "@x402/core/client";
-import { x402HTTPClient } from "@x402/core/http";
-import { registerEscrowScheme } from "@x402r/evm/escrow/client";
-import { isEscrowPayload } from "@x402r/evm/escrow/types";
-import type { EscrowPayload } from "@x402r/evm/escrow/types";
 import {
-  toPaymentInfo,
-  computePaymentInfoHash,
   resolveAddresses,
   type PaymentInfo,
 } from "@x402r/core";
 import { X402rClient } from "@x402r/client";
-import { savePaymentState } from "./cli/src/state.js";
+import { loadPaymentState } from "./cli/src/state.js";
 
 // ============ Config ============
 
@@ -97,7 +91,7 @@ const MERCHANT_URL =
 const OPERATOR_ADDRESS = (process.env.OPERATOR_ADDRESS ??
   "0xF5C1712736D3B8f34F245430edF9dF0aAd00D5B0") as Address;
 const ARBITER_URL =
-  process.env.ARBITER_URL ?? "http://34.145.75.41:3000";
+  process.env.ARBITER_URL ?? "https://www.moltarbiter.fun/arbiter";
 const RPC_URL = process.env.RPC_URL;
 
 // How long to wait for merchant bot + arbiter auto-eval (ms)
@@ -156,7 +150,7 @@ function runCli(args: string): string {
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════╗");
-  console.log("║    x402r E2E Live Test — Against Live Services          ║");
+  console.log("║    x402r E2E Live Test — Pay + Dispute Flow             ║");
   console.log("╚══════════════════════════════════════════════════════════╝");
 
   let passed = 0;
@@ -217,146 +211,11 @@ async function main() {
   trackPass("Wallet setup and balance check");
 
   // ================================================================
-  // Phase 2: HTTP 402 Payment (real fetch)
+  // Phase 2: Pay via CLI (`x402r pay`)
   // ================================================================
-  step("Phase 2: HTTP 402 Payment Against Live Merchant");
+  step("Phase 2: x402r pay — Escrow Payment via CLI");
 
-  // Setup x402 client with escrow scheme
-  const paymentClient = new x402Client();
-  registerEscrowScheme(paymentClient, {
-    signer: account,
-    networks: NETWORK_ID,
-  });
-  const httpClient = new x402HTTPClient(paymentClient);
-
-  // 2a. Unpaid request → 402
-  log(`Fetching ${MERCHANT_URL} (expecting 402)...`);
-  const response402 = await fetch(MERCHANT_URL);
-  log(`Status: ${response402.status}`);
-
-  if (response402.status !== 402) {
-    trackFail(
-      "Unpaid request returns 402",
-      `Expected 402, got ${response402.status}`,
-    );
-    console.error("Cannot continue without 402 response.");
-    process.exit(1);
-  }
-  trackPass("Unpaid request returns 402");
-
-  // 2b. Parse payment requirements from 402 response
-  const body402 = await response402.text();
-  const paymentRequired = httpClient.getPaymentRequiredResponse(
-    (name: string) => response402.headers.get(name) ?? undefined,
-    body402,
-  );
-  log(`Payment scheme: ${paymentRequired.paymentRequirements?.scheme ?? "unknown"}`);
-  trackPass("Parse payment requirements from 402");
-
-  // 2c. Create payment payload (signs escrow authorization)
-  const paymentPayload = await httpClient.createPaymentPayload(paymentRequired);
-  trackPass("Create signed payment payload");
-
-  // 2d. Send paid request
-  const requestHeaders = httpClient.encodePaymentSignatureHeader(paymentPayload);
-  log(`Sending paid request to ${MERCHANT_URL}...`);
-  const response200 = await fetch(MERCHANT_URL, {
-    method: "GET",
-    headers: requestHeaders,
-  });
-  log(`Status: ${response200.status}`);
-
-  if (response200.status !== 200) {
-    const errBody = await response200.text();
-    // Log all response headers for debugging
-    log("Response headers:");
-    response200.headers.forEach((value, key) => {
-      log(`  ${key}: ${value.slice(0, 300)}`);
-    });
-    log(`Response body: ${errBody.slice(0, 500)}`);
-    // Log what we sent
-    log("Request headers sent:");
-    for (const [k, v] of Object.entries(requestHeaders)) {
-      log(`  ${k}: ${String(v).slice(0, 100)}...`);
-    }
-    trackFail(
-      "Paid request returns 200",
-      `Got ${response200.status}`,
-    );
-    console.error("Cannot continue without successful payment.");
-    process.exit(1);
-  }
-
-  const responseBody = await response200.json();
-  log(`Response: ${JSON.stringify(responseBody).slice(0, 200)}`);
-  trackPass("Paid request returns 200");
-
-  // 2e. Extract PaymentInfo from escrow payload
-  if (!isEscrowPayload(paymentPayload.payload)) {
-    trackFail("Payload is EscrowPayload", "Not an escrow payload");
-    process.exit(1);
-  }
-
-  const paymentInfo: PaymentInfo = toPaymentInfo(
-    paymentPayload.payload as EscrowPayload,
-  );
-  const addresses = resolveAddresses(NETWORK_ID);
-  const paymentHash = computePaymentInfoHash(
-    CHAIN_ID,
-    addresses.escrowAddress as `0x${string}`,
-    paymentInfo,
-  );
-
-  log(`PaymentInfo hash: ${paymentHash}`);
-  log(`  operator: ${paymentInfo.operator}`);
-  log(`  payer:    ${paymentInfo.payer}`);
-  log(`  receiver: ${paymentInfo.receiver}`);
-
-  // 2f. Save payment state for CLI
-  savePaymentState({
-    paymentInfo,
-    operatorAddress: OPERATOR_ADDRESS,
-    paymentHash,
-    timestamp: new Date().toISOString(),
-    networkId: NETWORK_ID,
-  });
-  trackPass("PaymentInfo extracted and saved to ~/.x402r/last-payment.json");
-
-  // 2g. Post PaymentInfo to arbiter cache so it can resolve the dispute
-  try {
-    const piCacheResponse = await fetch(`${ARBITER_URL}/api/payment-info`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        operator: paymentInfo.operator,
-        payer: paymentInfo.payer,
-        receiver: paymentInfo.receiver,
-        token: paymentInfo.token,
-        maxAmount: paymentInfo.maxAmount.toString(),
-        preApprovalExpiry: paymentInfo.preApprovalExpiry.toString(),
-        authorizationExpiry: paymentInfo.authorizationExpiry.toString(),
-        refundExpiry: paymentInfo.refundExpiry.toString(),
-        minFeeBps: paymentInfo.minFeeBps,
-        maxFeeBps: paymentInfo.maxFeeBps,
-        feeReceiver: paymentInfo.feeReceiver,
-        salt: paymentInfo.salt.toString(),
-      }),
-    });
-    if (piCacheResponse.ok) {
-      log("PaymentInfo cached on arbiter server");
-    } else {
-      log(`Warning: Failed to cache PaymentInfo on arbiter (${piCacheResponse.status})`);
-    }
-  } catch (err) {
-    log(`Warning: Could not reach arbiter to cache PaymentInfo: ${err}`);
-  }
-
-  // ================================================================
-  // Phase 3: CLI Dispute
-  // ================================================================
-  step("Phase 3: CLI Dispute via x402r Commands");
-
-  // 3a. Configure CLI
+  // 2a. Configure CLI
   log("Configuring CLI...");
   try {
     const configOutput = runCli(
@@ -371,10 +230,93 @@ async function main() {
     );
   }
 
-  // 3b. File dispute
-  log("Filing dispute...");
+  // 2b. Run `x402r pay <merchant-url>`
+  log(`Running: x402r pay ${MERCHANT_URL}`);
+  let payOutput = "";
   try {
-    const disputeOutput = runCli(
+    payOutput = runCli(`pay ${MERCHANT_URL}`);
+    log(payOutput.trim());
+
+    if (payOutput.includes("Payment Complete")) {
+      trackPass("x402r pay completed successfully");
+    } else if (payOutput.includes("no payment required")) {
+      trackFail("x402r pay", "Server did not return 402 — no payment needed");
+      console.error("Cannot continue without a payment.");
+      process.exit(1);
+    } else {
+      trackFail("x402r pay", "Unexpected output (no 'Payment Complete')");
+    }
+  } catch (error) {
+    trackFail(
+      "x402r pay",
+      error instanceof Error ? error.message : String(error),
+    );
+    console.error("Cannot continue without a successful payment.");
+    process.exit(1);
+  }
+
+  // 2c. Verify payment hash in output
+  const hashMatch = payOutput.match(/Payment Hash:\s+(0x[a-fA-F0-9]+)/);
+  if (hashMatch) {
+    log(`Payment Hash: ${hashMatch[1]}`);
+    trackPass("Pay output includes payment hash");
+  } else {
+    trackFail("Pay output", "No payment hash found in output");
+  }
+
+  // 2d. Verify settle tx in output (optional — depends on facilitator)
+  if (payOutput.includes("Settle Tx:")) {
+    const txMatch = payOutput.match(/Settle Tx:\s+(0x[a-fA-F0-9]+)/);
+    if (txMatch) {
+      log(`Settle Tx: ${txMatch[1]}`);
+      log(`${SCANNER}/tx/${txMatch[1]}`);
+    }
+    trackPass("Pay output includes settle tx hash");
+  } else {
+    log("(No settle tx in output — facilitator may not return it)");
+  }
+
+  // 2e. Verify payment state was saved
+  const paymentState = loadPaymentState();
+  if (!paymentState) {
+    trackFail("Payment state", "No payment state found at ~/.x402r/last-payment.json");
+    console.error("Cannot continue without saved payment state.");
+    process.exit(1);
+  }
+
+  const paymentInfo: PaymentInfo = paymentState.paymentInfo;
+  log(`Saved PaymentInfo:`);
+  log(`  operator: ${paymentInfo.operator}`);
+  log(`  payer:    ${paymentInfo.payer}`);
+  log(`  receiver: ${paymentInfo.receiver}`);
+  log(`  amount:   ${formatUnits(paymentInfo.maxAmount, 6)} USDC`);
+  trackPass("Payment state saved to ~/.x402r/last-payment.json");
+
+  // 2f. Verify USDC was deducted
+  const usdcAfterPay = await publicClient.readContract({
+    address: USDC_ADDRESS,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [account.address],
+  });
+  const spent = usdcBalance - usdcAfterPay;
+  log(`USDC spent: ${formatUnits(spent, 6)} USDC`);
+  if (spent > 0n) {
+    trackPass("USDC deducted from payer balance");
+  } else {
+    log("(USDC not yet deducted — may still be in escrow pending settlement)");
+  }
+
+  // ================================================================
+  // Phase 3: CLI Dispute (tests compositeKey + dashboard link)
+  // ================================================================
+  step("Phase 3: x402r dispute — File Dispute via CLI");
+
+  // 3a. File dispute
+  log("Filing dispute...");
+  let disputeOutput = "";
+  try {
+    disputeOutput = runCli(
       'dispute "E2E live test: weather data was incorrect" --evidence "Expected sunny forecast, received rainy. Request made at UTC noon."',
     );
     log(disputeOutput.trim());
@@ -395,7 +337,25 @@ async function main() {
     );
   }
 
-  // 3c. Check status (should be Pending)
+  // 3b. Verify compositeKey in output
+  const compositeKeyMatch = disputeOutput.match(/Composite Key:\s+(0x[a-fA-F0-9]+)/);
+  if (compositeKeyMatch) {
+    log(`Composite Key: ${compositeKeyMatch[1]}`);
+    trackPass("Dispute output includes composite key");
+  } else {
+    trackFail("Dispute output", "No composite key found in output");
+  }
+
+  // 3c. Verify dashboard link in output
+  const dashboardMatch = disputeOutput.match(/Dashboard:\s+(https?:\/\/\S+)/);
+  if (dashboardMatch) {
+    log(`Dashboard link: ${dashboardMatch[1]}`);
+    trackPass("Dispute output includes dashboard link");
+  } else {
+    trackFail("Dispute output", "No dashboard link found in output");
+  }
+
+  // 3d. Check status (should be Pending)
   log("Checking dispute status...");
   try {
     const statusOutput = runCli("status");
@@ -416,8 +376,10 @@ async function main() {
     );
   }
 
-  // 3d. Show evidence
+  // 3e. Show evidence
   log("Showing dispute evidence...");
+  // Brief delay for RPC state propagation
+  await sleep(3000);
   try {
     const showOutput = runCli("show");
     log(showOutput.trim());
@@ -450,6 +412,7 @@ async function main() {
   );
 
   // Create SDK client for polling
+  const addresses = resolveAddresses(NETWORK_ID);
   const client = new X402rClient({
     publicClient: publicClient as any,
     walletClient: walletClient as any,
@@ -572,6 +535,28 @@ async function main() {
     );
   }
 
+  // 4d. Verify dashboard link works (fetch dispute page)
+  if (compositeKeyMatch) {
+    log("Verifying dashboard link...");
+    try {
+      const dashboardBase = ARBITER_URL.replace(/\/arbiter\/?$/, "");
+      const disputeApiUrl = `${ARBITER_URL}/api/dispute/${compositeKeyMatch[1]}`;
+      const apiResponse = await fetch(disputeApiUrl);
+      if (apiResponse.ok) {
+        const disputeData = await apiResponse.json() as Record<string, unknown>;
+        log(`Dashboard API: status=${disputeData.status}, amount=${disputeData.amount}`);
+        trackPass("Dashboard API returns dispute data");
+      } else {
+        trackFail("Dashboard API", `GET ${disputeApiUrl} returned ${apiResponse.status}`);
+      }
+    } catch (error) {
+      trackFail(
+        "Dashboard API",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
   // ================================================================
   // Summary
   // ================================================================
@@ -591,7 +576,7 @@ async function main() {
     console.log("\n  ✗ E2E LIVE TEST FAILED");
     process.exit(1);
   } else {
-    console.log("\n  ✓ E2E LIVE TEST PASSED — Full dispute lifecycle verified against live services");
+    console.log("\n  ✓ E2E LIVE TEST PASSED — Full pay + dispute lifecycle verified");
   }
 }
 

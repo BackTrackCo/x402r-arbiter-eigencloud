@@ -3,7 +3,9 @@
  */
 
 import type { Command } from "commander";
+import { keccak256, encodePacked } from "viem";
 import { X402rClient } from "@x402r/client";
+import { computePaymentInfoHash } from "@x402r/core";
 import { initCli } from "../setup.js";
 import { getPaymentInfo, saveDisputeState } from "../state.js";
 import { pinToIpfs } from "../ipfs.js";
@@ -119,9 +121,20 @@ export function registerDisputeCommand(program: Command): void {
         process.exit(1);
       }
 
+      // Compute compositeKey for dashboard link
+      const paymentHash = computePaymentInfoHash(
+        addresses.chainId,
+        addresses.escrowAddress,
+        paymentInfo,
+      );
+      const compositeKey = keccak256(
+        encodePacked(["bytes32", "uint256"], [paymentHash, nonce]),
+      );
+
       // Save dispute state
       saveDisputeState({
         nonce: nonce.toString(),
+        compositeKey,
         refundTxHash,
         evidenceTxHash,
         evidenceCid: cid,
@@ -132,7 +145,16 @@ export function registerDisputeCommand(program: Command): void {
       if (refundTxHash) console.log("  Refund Tx:", refundTxHash);
       if (evidenceTxHash) console.log("  Evidence Tx:", evidenceTxHash);
       console.log("  Evidence CID:", cid);
+      console.log("  Composite Key:", compositeKey);
       console.log("\n  State saved to ~/.x402r/last-dispute.json");
       console.log("  Run 'x402r status' to check dispute status");
+
+      // Print dashboard link if arbiter URL is configured
+      const { getConfig } = await import("../config.js");
+      const config = getConfig();
+      if (config.arbiterUrl) {
+        const dashboardBase = config.arbiterUrl.replace(/\/arbiter\/?$/, "");
+        console.log(`  Dashboard: ${dashboardBase}/dispute/${compositeKey}`);
+      }
     });
 }

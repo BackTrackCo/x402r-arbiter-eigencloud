@@ -102,11 +102,16 @@ Merchant: ${MERCHANT_URL}/weather`}</Code>
             </p>
           </Step>
 
-          <Step n={3} title="Buy from the merchant">
+          <Step n={3} title="Pay the merchant">
             <p className="text-muted-foreground mb-2">
-              Ask your bot to fetch the weather endpoint. The x402 payment
-              flow is automatic — the bot sees the 402, signs an escrow
-              payment, and retries:
+              Use the{" "}
+              <span className="text-foreground font-semibold">pay</span>{" "}
+              command to make an escrow payment. It handles the full 402
+              flow — GET, sign, retry — and saves the payment info for disputes:
+            </p>
+            <Code>{`x402r pay ${MERCHANT_URL}/weather`}</Code>
+            <p className="text-muted-foreground mt-2">
+              Or ask your bot directly:
             </p>
             <Code>{`"Buy weather data from ${MERCHANT_URL}/weather"`}</Code>
             <p className="text-muted-foreground mt-2">

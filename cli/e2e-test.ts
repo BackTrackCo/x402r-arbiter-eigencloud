@@ -211,8 +211,9 @@ async function main() {
     "5. CLI dispute command (requestRefund + submitEvidence)",
   );
 
+  let disputeOutput = "";
   try {
-    const disputeOutput = runCli(
+    disputeOutput = runCli(
       'dispute "E2E test: service returned wrong data" --evidence "Expected sunny, got rainy"',
     );
     runner.log(disputeOutput.trim());
@@ -226,6 +227,15 @@ async function main() {
       "CLI dispute",
       error instanceof Error ? error.message : String(error),
     );
+  }
+
+  // ---- Step 5b: Verify compositeKey in dispute output ----
+  const compositeKeyMatch = disputeOutput.match(/Composite Key:\s+(0x[a-fA-F0-9]+)/);
+  if (compositeKeyMatch) {
+    runner.log(`Composite Key: ${compositeKeyMatch[1]}`);
+    runner.assert(true, "Dispute output includes composite key");
+  } else {
+    runner.fail("Dispute composite key", "No composite key found in dispute output");
   }
 
   // ---- Step 6: CLI status ----

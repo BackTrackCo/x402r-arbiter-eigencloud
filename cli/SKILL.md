@@ -1,14 +1,14 @@
 ---
 name: x402r-dispute
-description: File and track payment disputes on the x402r refundable payments protocol
-version: 0.1.0
+description: Pay merchants and file payment disputes on the x402r refundable payments protocol
+version: 0.2.0
 author: x402r
 tags: [x402r, payments, disputes, web3, arbitration]
 ---
 
-# x402r Dispute Resolution CLI
+# x402r CLI
 
-You help users file and track payment disputes on the x402r protocol. The x402r protocol adds refundable payments to HTTP 402 — buyers can request refunds through on-chain arbitration.
+You help users make escrow payments and file payment disputes on the x402r protocol. The x402r protocol adds refundable payments to HTTP 402 — buyers can request refunds through on-chain arbitration.
 
 ## Installation
 
@@ -28,35 +28,33 @@ npm install -g @x402r/cli
 
 ## First-Time Setup
 
-Before using any commands, configure the CLI with the user's wallet and operator:
+Before using any commands, configure the CLI with the user's wallet:
 
 ```bash
-npx --yes @x402r/cli config --key <private-key> --operator <operator-address> --arbiter-url https://x402r-arbiter-eigencloud.vercel.app/arbiter
+npx --yes @x402r/cli config --key <private-key> --arbiter-url https://www.moltarbiter.fun/arbiter
 ```
 
 - `--key`: The user's Ethereum private key (0x-prefixed). Stored in `~/.x402r/config.json`.
-- `--operator`: The PaymentOperator contract address for the marketplace.
-- `--arbiter-url`: URL of the arbiter server. The public arbiter is at `https://x402r-arbiter-eigencloud.vercel.app/arbiter`.
-- `--network`: Network ID in EIP-155 format (default: `eip155:84532` for Base Sepolia). The test merchant at `https://x402r-test-merchant-production.up.railway.app` uses `eip155:11155111` (Ethereum Sepolia).
-- `--rpc`: Custom RPC URL (optional). For Ethereum Sepolia use `https://ethereum-sepolia-rpc.publicnode.com`.
+- `--arbiter-url`: URL of the arbiter server. The public arbiter is at `https://www.moltarbiter.fun/arbiter`.
+- `--operator`: The PaymentOperator contract address (auto-discovered from arbiter if omitted).
+- `--network`: Network ID in EIP-155 format (auto-discovered from arbiter, default: `eip155:84532` for Base Sepolia).
+- `--rpc`: Custom RPC URL (optional, auto-discovered from arbiter).
 
-### Test Merchant Quick Start
-
-To test against the live merchant on Ethereum Sepolia:
+### Quick Start (Base Sepolia)
 
 ```bash
-npx --yes @x402r/cli config --key <private-key> --operator 0xAfD051239DE540D7B51Aa514eb795a2D43C8fCb0 --arbiter-url https://x402r-arbiter-eigencloud.vercel.app/arbiter --network eip155:11155111 --rpc https://ethereum-sepolia-rpc.publicnode.com
+npx --yes @x402r/cli config --key <private-key> --arbiter-url https://www.moltarbiter.fun/arbiter
 ```
 
-The test merchant endpoint is `https://x402r-test-merchant-production.up.railway.app/weather`. You can verify it returns a 402:
+The operator address and network are auto-discovered from the arbiter. The test merchant endpoint is `https://fantastic-optimism-production-602a.up.railway.app/weather`. You can verify it returns a 402:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" https://x402r-test-merchant-production.up.railway.app/weather
+curl -s -o /dev/null -w "%{http_code}" https://fantastic-optimism-production-602a.up.railway.app/weather
 ```
 
-Your wallet needs Ethereum Sepolia ETH and USDC:
-- ETH faucet: https://www.alchemy.com/faucets/ethereum-sepolia
-- USDC faucet: https://faucet.circle.com/ (select Ethereum Sepolia)
+Your wallet needs Base Sepolia ETH and USDC:
+- ETH faucet: https://www.alchemy.com/faucets/base-sepolia
+- USDC faucet: https://faucet.circle.com/ (select Base Sepolia)
 
 To view current config:
 
@@ -65,6 +63,24 @@ npx --yes @x402r/cli config
 ```
 
 ## Commands
+
+### Pay a Merchant
+
+Makes an escrow payment to a merchant's x402-protected endpoint:
+
+```bash
+npx --yes @x402r/cli pay https://fantastic-optimism-production-602a.up.railway.app/weather
+```
+
+The command handles the full x402 payment flow:
+1. `GET <url>` — receives 402 with payment requirements
+2. Signs an escrow authorization locally
+3. Retries with the payment header — merchant's facilitator verifies and settles
+4. Saves payment info to `~/.x402r/last-payment.json` for later dispute
+5. Prints the response body
+
+Options:
+- `-o, --output <path>`: Save response body to a file
 
 ### File a Dispute
 
@@ -82,7 +98,7 @@ Options:
 - `-n, --nonce <nonce>`: Nonce for the refund request (default: 0)
 - `-a, --amount <amount>`: Refund amount in token units (default: full payment amount)
 
-The command saves dispute state to `~/.x402r/last-dispute.json` so subsequent commands can reference it.
+The command saves dispute state to `~/.x402r/last-dispute.json` and prints a dashboard link where you can track the dispute.
 
 ### Check Dispute Status
 
@@ -163,24 +179,24 @@ npx --yes @x402r/cli status --payment-json '{"operator":"0x<operator>","payer":"
 
 ## Typical Workflow
 
-1. User makes an HTTP 402 payment and receives poor service
-2. `npx --yes @x402r/cli dispute "reason" --evidence "details"` — files the dispute
+1. `npx --yes @x402r/cli pay <merchant-url>` — makes an escrow payment and saves payment info
+2. `npx --yes @x402r/cli dispute "reason" --evidence "details"` — files a dispute (uses saved payment info)
 3. `npx --yes @x402r/cli status` — checks if the arbiter has ruled
 4. `npx --yes @x402r/cli show` — views all evidence from both parties and the arbiter
 5. `npx --yes @x402r/cli verify` — verifies the AI ruling was deterministic
 
 ## Important Notes
 
-- The CLI saves state between commands. After `dispute`, you can run `status`, `show`, `verify` without re-specifying payment info.
-- If no saved state exists (no prior `dispute`), you must provide `--payment-json` and `--nonce` explicitly.
-- Evidence can be stored on IPFS (if Pinata keys are configured via `--pinata-key` and `--pinata-secret` on `config`) or inline as JSON strings.
+- The CLI saves state between commands. After `pay`, the payment info is saved for `dispute`. After `dispute`, you can run `status`, `show`, `verify` without re-specifying payment info.
+- If no saved state exists, you must provide `--payment-json` and `--nonce` explicitly.
+- Evidence can be stored on IPFS (if Pinata keys are configured via `--pinata-jwt` on `config`) or inline as JSON strings.
 - The `verify` command requires the arbiter server to be running — it replays the AI evaluation server-side.
 - All on-chain operations require ETH for gas on the configured network.
 
 ## Troubleshooting
 
 - **"fetch failed" / arbiter unreachable**: The arbiter server may be down. Commands like `list` require the server; `status` and `show` fall back to on-chain queries automatically.
-- **"No payment state found"**: Run `dispute` first to create saved state, or pass `--payment-json` directly.
+- **"No payment state found"**: Run `pay` first to create saved state, or pass `--payment-json` directly.
 - **Transaction reverts / insufficient gas**: Ensure the configured wallet has ETH on the target network for gas fees.
 - **`verify` fails with "fetch failed"**: The `verify` command requires the arbiter server to be running. Unlike `status` and `show`, it has no on-chain fallback — it replays the AI evaluation server-side.
 - **npx not found inside workspace**: If running in a pnpm monorepo, install globally with `npm install -g @x402r/cli` instead.

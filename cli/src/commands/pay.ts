@@ -34,7 +34,7 @@ export function registerPayCommand(program: Command): void {
 
       // 1. Create x402 payment client with escrow scheme
       const paymentClient = new x402Client();
-      registerEscrowScheme(paymentClient, { signer: account as never, networks: networkId });
+      registerEscrowScheme(paymentClient, { signer: account as never, networks: networkId as `${string}:${string}` });
       const httpClient = new x402HTTPClient(paymentClient);
 
       // 2. Initial request

@@ -2,7 +2,7 @@ import { Separator } from "@/components/ui/separator";
 import { LiveConfig } from "./live-config";
 
 const MERCHANT_URL = "https://fantastic-optimism-production-602a.up.railway.app";
-const ARBITER_URL = "https://www.moltarbiter.fun/arbiter";
+const ARBITER_URL = "https://www.moltarbiter.com/arbiter";
 
 export default function GuidePage() {
   return (

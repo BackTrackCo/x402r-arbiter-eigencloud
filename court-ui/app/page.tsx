@@ -91,13 +91,16 @@ export default function Dashboard() {
       const visible: DisputeWithKey[] = [];
 
       for (const d of details) {
-        const meta = await getDisputeMeta(d.paymentInfoHash, d.nonce);
+        // Resolved disputes (Approved / Denied) — always show
+        if (d.status === 1 || d.status === 2) {
+          visible.push(d);
+          continue;
+        }
 
-        // Hide disputes where arbiter submitted before receiver
-        if (meta.hasWrongOrder) continue;
-
-        // Pending — hide if older than 5 minutes
+        // Pending disputes — hide stale (>5 min) and wrong evidence order
         if (d.status === 0) {
+          const meta = await getDisputeMeta(d.paymentInfoHash, d.nonce);
+          if (meta.hasWrongOrder) continue;
           if (meta.createdAt !== null && nowS - meta.createdAt < STALE_PENDING_S) {
             visible.push(d);
           }

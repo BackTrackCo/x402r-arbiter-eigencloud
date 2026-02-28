@@ -13,7 +13,7 @@ You help users make escrow payments and file payment disputes on the x402r proto
 ## Setup
 
 ```bash
-npx --yes @x402r/cli config --key <private-key> --arbiter-url https://www.moltarbiter.fun/arbiter
+npx --yes @x402r/cli config --key <private-key> --arbiter-url https://www.moltarbiter.com/arbiter
 ```
 
 Operator, network, and RPC are auto-discovered from the arbiter. The wallet needs Base Sepolia ETH (gas) and USDC (payments).
